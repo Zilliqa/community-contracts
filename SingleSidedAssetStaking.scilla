@@ -1,0 +1,512 @@
+scilla_version 0
+
+import IntUtils BoolUtils
+
+library SingleSidedAssetStaking
+
+let uint128_zero = Uint128 0
+let uint128_one = Uint128 1
+let uint128_hundred = Uint128 100
+let bnum_zero = BNum 0
+let empty_bystr = 0x0000000000000000000000000000000000000000
+
+let tax_bps_min = Uint128 1 (* 0.01% *)
+let tax_bps_max = Uint128 10000 (* 100% *)
+
+type UserSSAS  =  | UserSSAS of BNum    (* block entered staking *)
+                                Uint128 (* deposited lktokens *)
+                                
+type TokenMove = | UserToContract | ContractToUser
+let utc        = UserToContract
+let ctu        = ContractToUser
+ 
+
+let one_msg = 
+    fun (msg : Message) => 
+        let nil_msg = Nil {Message} in
+        Cons {Message} msg nil_msg
+
+let two_msgs =
+    fun (msg1 : Message) =>
+    fun (msg2 : Message) =>
+        let msgs_tmp = one_msg msg2 in
+        Cons {Message} msg1 msgs_tmp
+        
+let list_sum =
+  fun (l : List (Pair ByStr20 UserSSAS)) =>
+    let foldl = @list_foldl (Pair ByStr20 UserSSAS) Uint128 in
+    let init = Uint128 0 in
+    let iter =
+      fun (sum : Uint128) =>
+      fun (list_element : Pair ByStr20 UserSSAS) =>
+        match list_element with 
+        | Pair _ (UserSSAS enter_stake_block currently_deposited_lktokens) =>
+            builtin add sum currently_deposited_lktokens
+        end 
+    in
+    foldl iter init l
+    
+let uint128_to_uint256 : Uint128 -> Uint256 =
+  fun (x : Uint128) =>
+    let ox256 = builtin to_uint256 x in
+      match ox256 with
+      | None =>
+        (* this never happens, hence we throw a division by zero exception just in case *)
+        let zero = Uint256 0 in
+        builtin div zero zero
+      | Some x256 => x256
+      end
+    
+(* Compute "(x * y) / z" with protection against integer overflows *)
+let muldiv : Uint128 -> Uint128 -> Uint128 -> Uint128 =
+    fun (x : Uint128) =>
+    fun (y : Uint128) =>
+    fun (z : Uint128) =>
+      let x256 = uint128_to_uint256 x in
+      let y256 = uint128_to_uint256 y in
+      let z256 = uint128_to_uint256 z in
+      let x_mul_y256 = builtin mul x256 y256 in
+      let res256 = builtin div x_mul_y256 z256 in
+      let ores128 = builtin to_uint128 res256 in
+      match ores128 with
+      | None =>
+        (* this must never happen, hence we throw an integer overflow exception *)
+        let max_uint128 = Uint128 340282366920938463463374607431768211455 in
+        let fourtytwo128 = Uint128 42 in
+        builtin mul max_uint128 fourtytwo128
+      | Some res128 =>
+        res128
+      end
+
+(* Error exception *)
+type Error =
+  | NotContractOwner
+  | SenderHasNoRewardsAtEpoch
+  | SenderWasNotPresentInTheSnapshot
+  | SenderIneligibleForRewardsAtEpoch
+  | SentRewardsNotAMutipleOfRewardPerEpoch
+  | MathOverflowError  
+  | SenderHasNoFundsAtContract
+  
+let make_error =
+  fun (result : Error) =>
+    let result_code = 
+      match result with
+      | NotContractOwner                 => Int32 -1
+      | SenderHasNoRewardsAtEpoch      => Int32 -2
+      | SenderWasNotPresentInTheSnapshot => Int32 -3
+      | SenderIneligibleForRewardsAtEpoch => Int32 -4
+      | SentRewardsNotAMutipleOfRewardPerEpoch => Int32 -5
+      | MathOverflowError                => Int32 -6 
+      | SenderHasNoFundsAtContract     => Int32 -7
+      end
+    in
+    { _exception : "Error"; code : result_code; res : result}
+    
+(*
+    EXTRA RESOURCES:
+    https://medium.com/paradigm-fund/combining-staking-and-liquidity-provisioning-d30e9d67d713
+    https://www.xdaichain.com/for-stakers/easy-staking/emission-rates
+
+    This contract is responsible for holding custody of locked assets and rewarding users for their share for a specific epoch.
+    An epoch is defined as a period of time represented by a period of BNums.
+    For an epoch, token owners (TO) can determine how many tokens are distributed for a given epoch.
+    For an epoch, users can earn a percentage share dependant on their share of the locker. 
+    Given that a token owner deposits rewards, these SSAS contracts are temporary and finite, unless 'TO' continues to deposit the underlying.
+    TO set's a minimum lock duration that allows for 0% fee withdrawals (7d default) - Users can withdraw instantly before 7d for a fee in LKtokens (10% default).
+    The reward rate is dynamic and varies depending on:
+    The number of LKtokens a user has & the number of LKtokens the pool has.
+    Users may claim a reward for a previously elapsed epoch they were present in. Users may not claim a reward for an epoch in progress. 
+
+*)
+contract SingleSidedAssetStaking
+(
+  contract_owner: ByStr20,
+  lktoken_contract: ByStr20 with end, (* potentially could be immutable *)
+  reward_token_contract: ByStr20 with end,
+  epoch_period_length: Uint128, (* ~2500bpd * 7d = 17500b as uint *)
+  early_leave_tax: Uint128,     (* 10 *)
+  immutable_reward_per_epoch: Uint128  (* rewarded in total per epoch *) (* immutable *)
+)
+with
+    let is_ok_min = uint128_gt early_leave_tax tax_bps_min in
+    let is_ok_max = uint128_lt early_leave_tax tax_bps_max in 
+    let is_ok = andb is_ok_min is_ok_max in
+    let x = BNum 1 in
+    match is_ok with 
+      | True =>
+           True
+      | False =>
+          False
+    end 
+=>
+
+field staged_contract_admin: Option ByStr20 = None {ByStr20}
+field paused: Bool = True
+
+field current_owner: ByStr20  = contract_owner
+
+field current_early_leave_tax: Uint128 = early_leave_tax
+(* user_address ->
+                    (enter_stake_block, deposited_lktokens*)
+field ssas_pool: Map ByStr20 UserSSAS = Emp ByStr20 UserSSAS
+
+
+(* length of an epoch in blocks represented as Uint128 *)
+field current_epoch_length: Uint128 = epoch_period_length           (* BNum  *)
+(* the block the next snapshot should be taken *)
+field next_snapshot_block_reward: BNum = _creation_block  (* TO DO - how to pass a function here that does the now + epoch*)
+(* incrementing primary key of the map *)
+field snapshot_id: Uint128 = uint128_zero
+(* stores snapshot_id + (user + ssas_pool) when _this_block >= next_snapshot_block_reward_snapshot*)
+field past_snapshot_pool: Map Uint128 (Map ByStr20 UserSSAS) = Emp Uint128 (Map ByStr20 UserSSAS)
+
+field total_taxed_amount: Uint128 = uint128_zero  (* totals the amount taxed, allows current_owner to withdraw *)
+field total_amount_locked: Uint128 = uint128_zero (* total amount locked by users *)
+field total_rewards_left: Uint128 = uint128_zero (* total amount of rewards deposited *)
+
+
+procedure ThrowError(err : Error)
+  e = make_error err;
+  throw e
+end
+
+procedure IsContractOwnerOrAdmin()
+  maybe_sca <- staged_contract_admin;
+  match maybe_sca with
+    | Some sca =>
+      is_contract_admin = builtin eq sca _sender;
+      is_contract_owner = builtin eq contract_owner _sender;
+      match is_contract_owner with
+      | True => 
+      | False =>
+        err = NotContractOwner;
+        ThrowError err
+        
+  end
+    | None =>
+  end
+
+end
+
+(* moves amount of reward_token_contract from x to y. De/Increases global held counter *)
+procedure MoveFungibleTokenFromXToY(token_move: TokenMove, fungible_contract:ByStr20 with end, from: ByStr20, to: ByStr20, amount: Uint128)
+  match token_move with
+    | UserToContract =>
+        transfer_to_contract = {
+          _tag: "TransferFrom";
+          _recipient: fungible_contract;
+          _amount: uint128_zero;
+          from: from;
+          to: to;
+          amount: amount
+          };
+        msgs = one_msg transfer_to_contract;
+        send msgs
+        
+    | ContractToUser =>
+        transfer_to_user = {
+          _tag: "Transfer";
+          _recipient: fungible_contract;
+          _amount: uint128_zero;
+          to: to;
+          amount: amount
+        };
+        msgs = one_msg transfer_to_user;
+        send msgs
+    end
+end
+
+(* ...ommitting misc ownership/pause transitions... *)
+
+(*
+  If its time to take a snapshot, we take a snapshot
+  Any user calling DEPOSIT,WITHDRAW,CLAIM could potentially trip this procedure, gas costs a full read of ssas_pool
+*)
+procedure IsSnapshotTime()
+  cb <-& BLOCKNUMBER;
+  nsbr <- next_snapshot_block_reward;
+  (* is the current block less than the snapshot (the past, will be true on the value of nsbr and future blocks) *)
+  is_future = builtin blt nsbr cb;
+  blocks_till_trigger = builtin bsub cb nsbr;
+  match is_future with
+    | True => (* equal to and the future *)
+      sid <- snapshot_id;
+      snbr <- next_snapshot_block_reward;
+      cel <- current_epoch_length;
+      sidpone = builtin add sid uint128_one;
+      snbrpcel = builtin badd snbr cel;
+
+      (* snapshot the pool right now *)
+      ssas_copy <- ssas_pool;
+      past_snapshot_pool[sid]:= ssas_copy;
+      (* increment counter and set new future block*)
+      snapshot_id := sidpone;
+      next_snapshot_block_reward:= snbrpcel;
+      
+      e = {_eventname : "SnapshotSuccess"; 
+           new_snapshot: sidpone; next_snapshot_block_reward:snbrpcel };
+      event e
+      
+    | False => (* the past *)
+
+      e = {_eventname : "NotSnapshotTime";
+           now: cb; snapshot_time:nsbr; blocks_till_trigger:blocks_till_trigger
+      };
+      event e
+  end
+end
+
+(*
+  Is a user claiming for a reward period that's valid (valid = present && not claimed for this snapshot epoch)
+  Update the snapshot map to mark as empty
+*)
+procedure ClaimRewardsForSnapshotOrError(claim_snapshot: Uint128)
+  maybe_sender_sass <- past_snapshot_pool[claim_snapshot][_sender];
+  match maybe_sender_sass with
+    | Some some_sender_sass => (* This row exists *)
+      match some_sender_sass with
+        | UserSSAS enter_stake_block currently_deposited_lktokens =>
+          
+          (* Have they claimed before? *)
+          is_stake_reset = builtin eq enter_stake_block bnum_zero;
+          match is_stake_reset with 
+            | True =>
+              err = SenderHasNoRewardsAtEpoch; (* Can't claim twice *)
+              ThrowError err
+            | False =>
+          end;
+          
+          (* can't claim for a past epoch if your min stake time is less than now (you was in the past snapshot, but was never eligible *)
+          cb <-& BLOCKNUMBER;
+          cel <- current_epoch_length;
+          min_valid_claim = builtin badd enter_stake_block cel;
+          is_past = builtin blt cb min_valid_claim;
+          has_claimed = builtin eq enter_stake_block bnum_zero;
+          match has_claimed with
+            | True => (* current is less than claim *)
+                err = SenderIneligibleForRewardsAtEpoch; 
+                ThrowError err
+            | False => (* claiming for the future *)
+          end;
+          match is_past with
+            | True => (* current is less than claim *)
+                err = SenderIneligibleForRewardsAtEpoch; 
+                ThrowError err
+            | False => (* claiming for the future *)
+          end;
+          
+          (* Claim reward *)
+          maybe_snapshot <- past_snapshot_pool[claim_snapshot];
+          match maybe_snapshot with
+            | Some snapshot => 
+              
+              (* Sum pool*)
+               snapshot_at_epoch_list = builtin to_list snapshot;
+               total_sum_at_epoch = list_sum snapshot_at_epoch_list;
+               
+               (* users reward_percent of total_reward *)
+               sender_percentaged_owned = builtin div total_sum_at_epoch currently_deposited_lktokens;
+               reward_amount = muldiv sender_percentaged_owned immutable_reward_per_epoch total_sum_at_epoch;
+               
+               e = {_eventname : "DEBUGClaimRewards"; 
+                total_sum_at_epoch:total_sum_at_epoch; total_user_share_at_epoch: currently_deposited_lktokens;
+                sender_percentaged_owned: sender_percentaged_owned; reward_amount:reward_amount
+                 
+               };
+               event e;
+               
+              (* send from this contract to _sender the reward amount *)
+              MoveFungibleTokenFromXToY ctu reward_token_contract _this_address _sender reward_amount; (* deposit amount. not recalculated addition*)
+              
+              (* set UserSSAS.enter_stake_block == 0 so they can't reclaim for this epoch *)
+              claimed_user_ssas = UserSSAS bnum_zero currently_deposited_lktokens;    
+              past_snapshot_pool[claim_snapshot][_sender]:= claimed_user_ssas
+            | None =>
+          end
+        
+      end
+    | None =>
+      err = SenderWasNotPresentInTheSnapshot; 
+      ThrowError err
+  end
+end
+
+(*
+  Allows a user to deposit an amount of lktokens into the contract
+  On increasing an already existing deposit, a new tax_threshold block is generated and you restart your tax-free duration starting from this_block
+*)
+transition Deposit(deposit_amount: Uint128)
+  IsSnapshotTime;
+  cb <-& BLOCKNUMBER;
+  maybe_exists <- ssas_pool[_sender];
+  cel <- current_epoch_length;
+  tal <- total_amount_locked;
+  deposit_lock_duration = builtin badd cb cel;
+  
+  match maybe_exists with
+    | Some some_user_ssas => (* user already exists, increase amount of tokens *)
+      match some_user_ssas with
+        | UserSSAS enter_stake_block currently_deposited_lktokens =>
+          
+
+            new_deposited_lktokens = builtin add currently_deposited_lktokens deposit_amount;
+            user_ssas = UserSSAS deposit_lock_duration       (* new lock duration            *)
+                                 new_deposited_lktokens; (* addition to tokens staked    *)
+            
+            (* move lktokens to contract *)
+            MoveFungibleTokenFromXToY utc lktoken_contract _sender _this_address deposit_amount; (* deposit amount. not recalculated addition*)
+            
+            ssas_pool[_sender] := user_ssas;
+            new_tal = builtin add tal deposit_amount;
+            total_amount_locked := new_tal;
+            
+            e = {_eventname : "IncreasingDepositSuccess"; user_ssas : user_ssas };
+            event e
+            
+        end
+    | None => (* user doesn't exist, initalise ssas *)
+    
+      user_ssas = UserSSAS deposit_lock_duration (* new lock duration     *)
+                           deposit_amount;    (* inital deposit amount *)
+                           
+      MoveFungibleTokenFromXToY utc lktoken_contract _sender _this_address deposit_amount;
+            
+      ssas_pool[_sender] := user_ssas;
+      new_tal = builtin add tal deposit_amount;
+      total_amount_locked := new_tal;
+      
+      e = {_eventname : "InitalDepositSuccess"; user_ssas : user_ssas };
+      event e
+  end
+end
+
+
+(*
+  Allows a user to claim rewards without leaving or reseting UserSSAS.block_entered_staking
+  User is rewarded UserSSAS.reward_total amount of current_reward_token_contract => UserSSAS.reward_total = 0
+*)
+transition ClaimRewards(claim_snapshot: Uint128)
+(* is time for merkle? *)
+  IsSnapshotTime;
+(* does the user have rewards *)
+  ClaimRewardsForSnapshotOrError claim_snapshot
+(* how many rewards do they have *)
+  
+(* reward reset*)
+end
+
+(*
+  Allows a user to leave the ssas pool
+    If UserSSAS.block_entered_staking + epoch_period_length <= BLOCKNUMBER  (no tax)
+    else tax 10% of total_deposit_amount and increment total_taxed_amount
+    
+    remove this from the real pool
+*)
+transition Withdraw()
+  IsSnapshotTime;
+  maybe_exists <- ssas_pool[_sender];
+   match maybe_exists with
+    | Some some_user_ssas => 
+      match some_user_ssas with
+        | UserSSAS enter_stake_block currently_deposited_lktokens =>
+          
+            cb <-& BLOCKNUMBER;
+            cel <- current_epoch_length;
+            tax_free_threshold = builtin badd enter_stake_block cel; (* calc tax_free block *)
+            is_taxable = builtin blt cb tax_free_threshold; (* is now in the past compared to threshold *)
+            match is_taxable with
+              | True => 
+                (* tax 10% of users deposit *)
+                early_leave_tax_bps <- current_early_leave_tax;
+                x = builtin div tax_bps_max early_leave_tax_bps; 
+                tax_amount_as_uint256 = builtin div currently_deposited_lktokens x;
+                maybe_tax_amount = builtin to_uint128 tax_amount_as_uint256;
+                match maybe_tax_amount with 
+                 | Some tax_amount => 
+                    (* calculate tax *)
+                    currently_deposited_lktokens_after_tax = builtin sub currently_deposited_lktokens tax_amount; 
+                    (* increase contract allowance for tax *)
+                    txa <- total_taxed_amount;
+                    new_txa = builtin add txa tax_amount;
+                    total_taxed_amount:= new_txa;
+                    (* decrease total amount locked by withdraw amount *)
+                    tal <- total_amount_locked;
+                    new_tal = builtin sub tal currently_deposited_lktokens_after_tax;
+                    total_amount_locked:= new_tal;
+                    (* move lktokens to user *)
+                    MoveFungibleTokenFromXToY ctu lktoken_contract _this_address _sender currently_deposited_lktokens_after_tax; (* deposit amount. not recalculated addition*)
+                    (* remove from pool*)
+                    delete ssas_pool[_sender];
+                    (* withdraw with tax success *)
+                    e = {_eventname : "TaxableWithdrawSuccess"; 
+                    you_deposited:currently_deposited_lktokens; you_withdrew:currently_deposited_lktokens_after_tax; tax_applied:tax_amount;
+                    you_joined_pool_at:enter_stake_block; you_left_at:cb; you_should_have_left_at: tax_free_threshold }; 
+                    event e
+                 | None => (* Some math overflow error*)
+                 err = MathOverflowError;
+                 ThrowError err
+                end 
+                
+              | False => (* tax free *)
+                (* decrease total amount locked by withdraw amount *)
+                tal <- total_amount_locked;
+                new_tal = builtin sub tal currently_deposited_lktokens;
+                total_amount_locked:= new_tal;
+                (* move lktokens to user *)
+                MoveFungibleTokenFromXToY ctu lktoken_contract _this_address _sender currently_deposited_lktokens; (* deposit amount. not recalculated addition*)
+                (* remove from pool*)
+                delete ssas_pool[_sender];
+                (* withdraw with tax success *)
+                e = {_eventname : "NonTaxableWithdrawSuccess"; 
+                you_deposited:currently_deposited_lktokens; you_withdrew:currently_deposited_lktokens; 
+                you_joined_pool_at:enter_stake_block; you_left_at:cb}; 
+                event e
+            end
+      end
+    | None =>
+      (* user has no stake *)
+      err = SenderHasNoFundsAtContract;
+      ThrowError err
+  end
+end
+
+(*
+  Admin can topup rewards and extend contract life if it's a full multiple of the immutable rewards 
+*)
+transition AdminSendRewards(amount: Uint128)
+(* use reward_per_epoch to check if the incoming amount is a mutiple, otherwise people will get mad *)
+  IsSnapshotTime;
+  trl <- total_rewards_left;
+  (*
+  modulus_rewards = builtin rem immutable_reward_per_epoch amount;
+  is_perfect_division = builtin eq modulus_rewards uint128_zero; 
+  *)
+  
+  (* move reward to contract *)
+  MoveFungibleTokenFromXToY utc reward_token_contract _sender _this_address amount;
+
+  new_rewards_left = builtin add trl amount;
+  total_rewards_left:= new_rewards_left
+
+end
+
+transition AdminReclaimTax()
+  IsSnapshotTime;
+  tta <- total_taxed_amount;
+  (* move tax to admin *)
+  MoveFungibleTokenFromXToY utc lktoken_contract _sender _this_address tta; 
+  total_taxed_amount:= uint128_zero
+end
+
+transition TransferSuccessCallBack(sender: ByStr20, recipient: ByStr20, amount: Uint128)
+end
+
+transition RecipientAcceptTransfer(sender: ByStr20, recipient: ByStr20, amount: Uint128)
+end
+
+transition RecipientAcceptTransferFrom(initiator: ByStr20, sender: ByStr20, recipient: ByStr20, amount: Uint128)
+end
+
+transition TransferFromSuccessCallBack(initiator: ByStr20, sender: ByStr20, recipient: ByStr20, amount: Uint128)
+end
