@@ -185,6 +185,8 @@ procedure IsContractOwnerOrAdmin()
         
   end
     | None =>
+        err = NotContractOwner;
+        ThrowError err
   end
 
 end
@@ -475,6 +477,7 @@ end
   Admin can topup rewards and extend contract life if it's a full multiple of the immutable rewards 
 *)
 transition AdminSendRewards(amount: Uint128)
+  IsContractOwnerOrAdmin;
 (* use reward_per_epoch to check if the incoming amount is a mutiple, otherwise people will get mad *)
   IsSnapshotTime;
   trl <- total_rewards_left;
@@ -492,6 +495,7 @@ transition AdminSendRewards(amount: Uint128)
 end
 
 transition AdminReclaimTax()
+  IsContractOwnerOrAdmin;
   IsSnapshotTime;
   tta <- total_taxed_amount;
   (* move tax to admin *)
