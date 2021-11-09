@@ -191,7 +191,7 @@ procedure IsContractOwnerOrAdmin()
 
 end
 
-(* moves amount of reward_token_contract from x to y. De/Increases global held counter *)
+(* moves amount of reward_token_contract from x to y. *)
 procedure MoveFungibleTokenFromXToY(token_move: TokenMove, fungible_contract:ByStr20 with end, from: ByStr20, to: ByStr20, amount: Uint128)
   match token_move with
     | UserToContract =>
@@ -351,10 +351,9 @@ transition Deposit(deposit_amount: Uint128)
       match some_user_ssas with
         | UserSSAS enter_stake_block currently_deposited_lktokens =>
           
-
             new_deposited_lktokens = builtin add currently_deposited_lktokens deposit_amount;
-            user_ssas = UserSSAS deposit_lock_duration       (* new lock duration            *)
-                                 new_deposited_lktokens; (* addition to tokens staked    *)
+            user_ssas = UserSSAS deposit_lock_duration      (* new lock duration            *)
+                                 new_deposited_lktokens;    (* addition to tokens staked    *)
             
             (* move lktokens to contract *)
             MoveFungibleTokenFromXToY utc lktoken_contract _sender _this_address deposit_amount; (* deposit amount. not recalculated addition*)
@@ -391,18 +390,13 @@ end
 transition ClaimRewards(claim_snapshot: Uint128)
 (* is time for merkle? *)
   IsSnapshotTime;
-(* does the user have rewards *)
   ClaimRewardsForSnapshotOrError claim_snapshot
-(* how many rewards do they have *)
-  
-(* reward reset*)
 end
 
 (*
-  Allows a user to leave the ssas pool
+    Allows a user to leave the ssas pool
     If UserSSAS.block_entered_staking + epoch_period_length <= BLOCKNUMBER  (no tax)
     else tax 10% of total_deposit_amount and increment total_taxed_amount
-    
     remove this from the real pool
 *)
 transition Withdraw()
@@ -478,12 +472,12 @@ end
 *)
 transition AdminSendRewards(amount: Uint128)
   IsContractOwnerOrAdmin;
-(* use reward_per_epoch to check if the incoming amount is a mutiple, otherwise people will get mad *)
+  (* use reward_per_epoch to check if the incoming amount is a mutiple, otherwise people will get mad *)
   IsSnapshotTime;
   trl <- total_rewards_left;
   (*
-  modulus_rewards = builtin rem immutable_reward_per_epoch amount;
-  is_perfect_division = builtin eq modulus_rewards uint128_zero; 
+    modulus_rewards = builtin rem immutable_reward_per_epoch amount;
+    is_perfect_division = builtin eq modulus_rewards uint128_zero; 
   *)
   
   (* move reward to contract *)
@@ -491,7 +485,6 @@ transition AdminSendRewards(amount: Uint128)
 
   new_rewards_left = builtin add trl amount;
   total_rewards_left:= new_rewards_left
-
 end
 
 transition AdminReclaimTax()
