@@ -302,24 +302,15 @@ procedure ClaimRewardsForSnapshotOrError(claim_snapshot: Uint128)
           maybe_snapshot <- past_snapshot_pool[claim_snapshot];
           match maybe_snapshot with
             | Some snapshot => 
-              
               (* Sum pool*)
-               snapshot_at_epoch_list = builtin to_list snapshot;
-               total_sum_at_epoch = list_sum snapshot_at_epoch_list;
-               
-               (* users reward_percent of total_reward *)
-               sender_percentaged_owned = builtin div total_sum_at_epoch currently_deposited_lktokens;
-               reward_amount = muldiv sender_percentaged_owned immutable_reward_per_epoch total_sum_at_epoch;
-               
-               e = {_eventname : "DEBUGClaimRewards"; 
-                total_sum_at_epoch:total_sum_at_epoch; total_user_share_at_epoch: currently_deposited_lktokens;
-                sender_percentaged_owned: sender_percentaged_owned; reward_amount:reward_amount
-                 
-               };
-               event e;
-               
+              snapshot_at_epoch_list = builtin to_list snapshot;
+              total_sum_at_epoch = list_sum snapshot_at_epoch_list;
+              
+              (* users reward_percent of total_reward *)
+              user_share_of_rewards = muldiv currently_deposited_lktokens immutable_reward_per_epoch total_sum_at_epoch;
+
               (* send from this contract to _sender the reward amount *)
-              MoveFungibleTokenFromXToY ctu reward_token_contract _this_address _sender reward_amount; (* deposit amount. not recalculated addition*)
+              MoveFungibleTokenFromXToY ctu reward_token_contract _this_address _sender user_share_of_rewards; (* deposit amount. not recalculated addition*)
               
               (* set UserSSAS.enter_stake_block == 0 so they can't reclaim for this epoch *)
               claimed_user_ssas = UserSSAS bnum_zero currently_deposited_lktokens;    
@@ -416,7 +407,7 @@ transition Withdraw()
                 (* tax 10% of users deposit *)
                 early_leave_tax_bps <- current_early_leave_tax;
                 x = builtin div tax_bps_max early_leave_tax_bps; 
-                tax_amount_as_uint256 = builtin div currently_deposited_lktokens x;
+                tax_amount_as_uint256 = builtin div currently_deposited_lktokens x; (* simplify with muldiv *)
                 maybe_tax_amount = builtin to_uint128 tax_amount_as_uint256;
                 match maybe_tax_amount with 
                  | Some tax_amount => 
