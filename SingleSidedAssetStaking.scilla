@@ -494,17 +494,36 @@ transition AdminSendRewards(amount: Uint128)
   
 end
 (*
-  allows admin to reclaim total_taxed_amount
+  allows admin to reclaim total_taxed_amount (tax = lktokens)
 *)
 transition AdminReclaimTax()
   IsContractOwnerOrAdmin;
   IsSnapshotTime;
   tta <- total_taxed_amount;
   (* move tax to admin amd update  *)
-  MoveFungibleTokenFromXToY utc lktoken_contract _sender _this_address tta; 
+  MoveFungibleTokenFromXToY ctu lktoken_contract _this_address _sender tta; 
   total_taxed_amount:= uint128_zero;
   e = {_eventname : "AdminClaimedTaxSuccess"; tax_sent_to_admin : tta; contract_held_now: uint128_zero};
   event e
+end
+
+(*
+  contract must be paused if admin wants to claim rewards (rewards = reward_token_contract)
+*)
+transition AdminReclaimRewards()
+  IsContractOwnerOrAdmin;
+  IsSnapshotTime;
+  is_paused <- paused;
+  match is_paused with
+    | True =>
+      trl <- total_rewards_left;
+      (* move tax to admin amd update  *)
+      MoveFungibleTokenFromXToY ctu reward_token_contract _this_address _sender trl; 
+      total_rewards_left:= uint128_zero;
+      e = {_eventname : "AdminClaimRewardsSuccess"; rewards_taken:trl; contract_held_now: uint128_zero};
+      event e
+    | False =>
+  end
 end
 
 (*
