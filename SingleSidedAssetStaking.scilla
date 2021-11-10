@@ -80,25 +80,29 @@ let muldiv : Uint128 -> Uint128 -> Uint128 -> Uint128 =
 
 (* Error exception *)
 type Error =
-  | NotContractOwner
+  | NotContractOwnerOrAdmin
   | SenderHasNoRewardsAtEpoch
   | SenderWasNotPresentInTheSnapshot
   | SenderIneligibleForRewardsAtEpoch
   | SentRewardsNotAMutipleOfRewardPerEpoch
   | MathOverflowError  
   | SenderHasNoFundsAtContract
-  
+  | SenderHasAlreadyClaimedForEpoch
+  | SnapshotError
+
 let make_error =
   fun (result : Error) =>
     let result_code = 
       match result with
-      | NotContractOwner                 => Int32 -1
+      | NotContractOwnerOrAdmin                 => Int32 -1
       | SenderHasNoRewardsAtEpoch      => Int32 -2
       | SenderWasNotPresentInTheSnapshot => Int32 -3
       | SenderIneligibleForRewardsAtEpoch => Int32 -4
       | SentRewardsNotAMutipleOfRewardPerEpoch => Int32 -5
       | MathOverflowError                => Int32 -6 
       | SenderHasNoFundsAtContract     => Int32 -7
+      | SenderHasAlreadyClaimedForEpoch => Int32 -8
+      | SnapshotError => Int32 -9
       end
     in
     { _exception : "Error"; code : result_code; res : result}
@@ -165,7 +169,6 @@ field total_taxed_amount: Uint128 = uint128_zero  (* totals the amount taxed, al
 field total_amount_locked: Uint128 = uint128_zero (* total amount locked by users *)
 field total_rewards_left: Uint128 = uint128_zero (* total amount of rewards deposited *)
 
-
 procedure ThrowError(err : Error)
   e = make_error err;
   throw e
@@ -177,18 +180,15 @@ procedure IsContractOwnerOrAdmin()
     | Some sca =>
       is_contract_admin = builtin eq sca _sender;
       is_contract_owner = builtin eq contract_owner _sender;
-      match is_contract_owner with
-      | True => 
-      | False =>
-        err = NotContractOwner;
-        ThrowError err
-        
-  end
+      either = orb is_contract_admin is_contract_owner;
+      match either with
+        | True => 
+        | False =>
+          err = NotContractOwnerOrAdmin;
+          ThrowError err
+      end
     | None =>
-        err = NotContractOwner;
-        ThrowError err
   end
-
 end
 
 (* moves amount of reward_token_contract from x to y. *)
@@ -234,7 +234,7 @@ procedure IsSnapshotTime()
   match is_future with
     | True => (* equal to and the future *)
       sid <- snapshot_id;
-      snbr <- next_snapshot_block_reward;
+      snbr <- next_snapshot_block_reward; 
       cel <- current_epoch_length;
       sidpone = builtin add sid uint128_one;
       snbrpcel = builtin badd snbr cel;
@@ -244,14 +244,13 @@ procedure IsSnapshotTime()
       past_snapshot_pool[sid]:= ssas_copy;
       (* increment counter and set new future block*)
       snapshot_id := sidpone;
-      next_snapshot_block_reward:= snbrpcel;
+      next_snapshot_block_reward:= snbrpcel; (* maybe this should use now block as, it can still lag behind and capture more recent captures for older blocks 100% change this *)
       
       e = {_eventname : "SnapshotSuccess"; 
            new_snapshot: sidpone; next_snapshot_block_reward:snbrpcel };
       event e
       
     | False => (* the past *)
-
       e = {_eventname : "NotSnapshotTime";
            now: cb; snapshot_time:nsbr; blocks_till_trigger:blocks_till_trigger
       };
@@ -286,16 +285,16 @@ procedure ClaimRewardsForSnapshotOrError(claim_snapshot: Uint128)
           is_past = builtin blt cb min_valid_claim;
           has_claimed = builtin eq enter_stake_block bnum_zero;
           match has_claimed with
-            | True => (* current is less than claim *)
-                err = SenderIneligibleForRewardsAtEpoch; 
+            | True => (* already claimed for this epoch *)
+                err = SenderHasAlreadyClaimedForEpoch; 
                 ThrowError err
-            | False => (* claiming for the future *)
+            | False => (* claiming for an unclaimed block *)
           end;
           match is_past with
-            | True => (* current is less than claim *)
+            | True => (* never was eligible at snapshot *)
                 err = SenderIneligibleForRewardsAtEpoch; 
                 ThrowError err
-            | False => (* claiming for the future *)
+            | False => (* claiming for an eligble staking duration period *)
           end;
           
           (* Claim reward *)
@@ -316,8 +315,10 @@ procedure ClaimRewardsForSnapshotOrError(claim_snapshot: Uint128)
               claimed_user_ssas = UserSSAS bnum_zero currently_deposited_lktokens;    
               past_snapshot_pool[claim_snapshot][_sender]:= claimed_user_ssas
             | None =>
+              (* should never get here? *)
+              err = SnapshotError;
+              ThrowError err
           end
-        
       end
     | None =>
       err = SenderWasNotPresentInTheSnapshot; 
