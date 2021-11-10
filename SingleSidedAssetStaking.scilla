@@ -89,6 +89,7 @@ type Error =
   | SenderHasNoFundsAtContract
   | SenderHasAlreadyClaimedForEpoch
   | SnapshotError
+  | IsPaused
 
 let make_error =
   fun (result : Error) =>
@@ -103,6 +104,7 @@ let make_error =
       | SenderHasNoFundsAtContract     => Int32 -7
       | SenderHasAlreadyClaimedForEpoch => Int32 -8
       | SnapshotError => Int32 -9
+      | IsPaused => Int32 -10
       end
     in
     { _exception : "Error"; code : result_code; res : result}
@@ -146,8 +148,7 @@ with
 =>
 
 field staged_contract_admin: Option ByStr20 = None {ByStr20}
-field paused: Bool = True
-
+field paused: Bool = False
 field current_owner: ByStr20  = contract_owner
 
 field current_early_leave_tax: Uint128 = early_leave_tax
@@ -169,6 +170,7 @@ field total_taxed_amount: Uint128 = uint128_zero  (* totals the amount taxed, al
 field total_amount_locked: Uint128 = uint128_zero (* total amount locked by users *)
 field total_rewards_left: Uint128 = uint128_zero (* total amount of rewards deposited *)
 
+
 procedure ThrowError(err : Error)
   e = make_error err;
   throw e
@@ -188,6 +190,19 @@ procedure IsContractOwnerOrAdmin()
           ThrowError err
       end
     | None =>
+    err = NotContractOwnerOrAdmin;
+    ThrowError err
+  end
+end
+
+procedure IsNotPaused()
+  is_paused <- paused;
+  match is_paused with
+    | True => 
+      err = IsPaused;
+      ThrowError err
+    | False =>
+
   end
 end
 
@@ -219,7 +234,7 @@ procedure MoveFungibleTokenFromXToY(token_move: TokenMove, fungible_contract:ByS
     end
 end
 
-(* ...ommitting misc ownership/pause transitions... *)
+(* ...ommitting ownership transitions... *)
 
 (*
   If its time to take a snapshot, we take a snapshot
@@ -259,83 +274,11 @@ procedure IsSnapshotTime()
 end
 
 (*
-  Is a user claiming for a reward period that's valid (valid = present && not claimed for this snapshot epoch)
-  Update the snapshot map to mark as empty
-*)
-procedure ClaimRewardsForSnapshotOrError(claim_snapshot: Uint128)
-  maybe_sender_sass <- past_snapshot_pool[claim_snapshot][_sender];
-  match maybe_sender_sass with
-    | Some some_sender_sass => (* This row exists *)
-      match some_sender_sass with
-        | UserSSAS enter_stake_block currently_deposited_lktokens =>
-          
-          (* Have they claimed before? *)
-          is_stake_reset = builtin eq enter_stake_block bnum_zero;
-          match is_stake_reset with 
-            | True =>
-              err = SenderHasNoRewardsAtEpoch; (* Can't claim twice *)
-              ThrowError err
-            | False =>
-          end;
-          
-          (* can't claim for a past epoch if your min stake time is less than now (you was in the past snapshot, but was never eligible *)
-          cb <-& BLOCKNUMBER;
-          cel <- current_epoch_length;
-          min_valid_claim = builtin badd enter_stake_block cel;
-          is_past = builtin blt cb min_valid_claim;
-          has_claimed = builtin eq enter_stake_block bnum_zero;
-          match has_claimed with
-            | True => (* already claimed for this epoch *)
-                err = SenderHasAlreadyClaimedForEpoch; 
-                ThrowError err
-            | False => (* claiming for an unclaimed block *)
-          end;
-          match is_past with
-            | True => (* never was eligible at snapshot *)
-                err = SenderIneligibleForRewardsAtEpoch; 
-                ThrowError err
-            | False => (* claiming for an eligble staking duration period *)
-          end;
-          
-          (* Claim reward *)
-          maybe_snapshot <- past_snapshot_pool[claim_snapshot];
-          match maybe_snapshot with
-            | Some snapshot => 
-              (* Sum pool*)
-              snapshot_at_epoch_list = builtin to_list snapshot;
-              total_sum_at_epoch = list_sum snapshot_at_epoch_list;
-              
-              (* users reward_percent of total_reward *)
-              user_share_of_rewards = muldiv currently_deposited_lktokens immutable_reward_per_epoch total_sum_at_epoch;
-
-              (* send from this contract to _sender the reward amount *)
-              MoveFungibleTokenFromXToY ctu reward_token_contract _this_address _sender user_share_of_rewards; (* deposit amount. not recalculated addition*)
-              
-              (* set UserSSAS.enter_stake_block == 0 so they can't reclaim for this epoch *)
-              claimed_user_ssas = UserSSAS bnum_zero currently_deposited_lktokens;    
-              past_snapshot_pool[claim_snapshot][_sender]:= claimed_user_ssas;
-              
-              e = {_eventname : "ClaimedRewardForEpochSuccess"; epoch :claim_snapshot; 
-              sum_at_epoch: total_sum_at_epoch; user_share_at_epoch: currently_deposited_lktokens; user_share_of_rewards:user_share_of_rewards; 
-              zeroed_claim: claimed_user_ssas };
-              event e
-            | None =>
-              (* should never get here? *)
-              err = SnapshotError;
-              ThrowError err
-          end
-      end
-    | None =>
-      err = SenderWasNotPresentInTheSnapshot; 
-      ThrowError err
-  end
-end
-
-(*
   Allows a user to deposit an amount of lktokens into the contract
   On increasing an already existing deposit, a new tax_threshold block is generated and you restart your tax-free duration starting from this_block
 *)
 transition Deposit(deposit_amount: Uint128)
+  IsNotPaused;
   IsSnapshotTime;
   cb <-& BLOCKNUMBER;
   maybe_exists <- ssas_pool[_sender];
@@ -385,9 +328,74 @@ end
   User is rewarded UserSSAS.reward_total amount of current_reward_token_contract => UserSSAS.reward_total = 0
 *)
 transition ClaimRewards(claim_snapshot: Uint128)
-(* is time for merkle? *)
+  IsNotPaused;
   IsSnapshotTime;
-  ClaimRewardsForSnapshotOrError claim_snapshot
+  maybe_sender_sass <- past_snapshot_pool[claim_snapshot][_sender];
+    match maybe_sender_sass with
+      | Some some_sender_sass => (* This row exists *)
+        match some_sender_sass with
+          | UserSSAS enter_stake_block currently_deposited_lktokens =>
+            
+            (* Have they claimed before? *)
+            is_stake_reset = builtin eq enter_stake_block bnum_zero;
+            match is_stake_reset with 
+              | True =>
+                err = SenderHasNoRewardsAtEpoch; (* Can't claim twice *)
+                ThrowError err
+              | False =>
+            end;
+            
+            (* can't claim for a past epoch if your min stake time is less than now (you was in the past snapshot, but was never eligible *)
+            cb <-& BLOCKNUMBER;
+            cel <- current_epoch_length;
+            min_valid_claim = builtin badd enter_stake_block cel;
+            is_past = builtin blt cb min_valid_claim;
+            has_claimed = builtin eq enter_stake_block bnum_zero;
+            match has_claimed with
+              | True => (* already claimed for this epoch *)
+                  err = SenderHasAlreadyClaimedForEpoch; 
+                  ThrowError err
+              | False => (* claiming for an unclaimed block *)
+            end;
+            match is_past with
+              | True => (* never was eligible at snapshot *)
+                  err = SenderIneligibleForRewardsAtEpoch; 
+                  ThrowError err
+              | False => (* claiming for an eligble staking duration period *)
+            end;
+            
+            (* Claim reward *)
+            maybe_snapshot <- past_snapshot_pool[claim_snapshot];
+            match maybe_snapshot with
+              | Some snapshot => 
+                (* Sum pool*)
+                snapshot_at_epoch_list = builtin to_list snapshot;
+                total_sum_at_epoch = list_sum snapshot_at_epoch_list;
+                
+                (* users reward_percent of total_reward *)
+                user_share_of_rewards = muldiv currently_deposited_lktokens immutable_reward_per_epoch total_sum_at_epoch;
+  
+                (* send from this contract to _sender the reward amount *)
+                MoveFungibleTokenFromXToY ctu reward_token_contract _this_address _sender user_share_of_rewards; (* deposit amount. not recalculated addition*)
+                
+                (* set UserSSAS.enter_stake_block == 0 so they can't reclaim for this epoch *)
+                claimed_user_ssas = UserSSAS bnum_zero currently_deposited_lktokens;    
+                past_snapshot_pool[claim_snapshot][_sender]:= claimed_user_ssas;
+                
+                e = {_eventname : "ClaimedRewardForEpochSuccess"; epoch :claim_snapshot; 
+                sum_at_epoch: total_sum_at_epoch; user_share_at_epoch: currently_deposited_lktokens; user_share_of_rewards:user_share_of_rewards; 
+                zeroed_claim: claimed_user_ssas };
+                event e
+              | None =>
+                (* should never get here? *)
+                err = SnapshotError;
+                ThrowError err
+            end
+        end
+      | None =>
+        err = SenderWasNotPresentInTheSnapshot; 
+        ThrowError err
+    end
 end
 
 (*
@@ -397,6 +405,7 @@ end
     remove this from the real pool
 *)
 transition Withdraw()
+  IsNotPaused;
   IsSnapshotTime;
   maybe_exists <- ssas_pool[_sender];
    match maybe_exists with
@@ -484,7 +493,9 @@ transition AdminSendRewards(amount: Uint128)
   event e
   
 end
-
+(*
+  allows admin to reclaim total_taxed_amount
+*)
 transition AdminReclaimTax()
   IsContractOwnerOrAdmin;
   IsSnapshotTime;
@@ -494,6 +505,33 @@ transition AdminReclaimTax()
   total_taxed_amount:= uint128_zero;
   e = {_eventname : "AdminClaimedTaxSuccess"; tax_sent_to_admin : tta; contract_held_now: uint128_zero};
   event e
+end
+
+(*
+  allows admin to toggle pause all interactions
+*)
+transition AdminTogglePause(pause_state: Bool)
+  IsContractOwnerOrAdmin;
+  paused:=pause_state
+end
+
+(*
+  staged_contract_admin
+*)
+transition RequestDelegatorSwap()
+  IsContractOwnerOrAdmin
+end
+  
+transition ConfirmDelegatorSwap()
+  IsContractOwnerOrAdmin
+end
+
+transition RevokeDelegatorSwap()
+  IsContractOwnerOrAdmin
+end
+
+transition RejectDelegatorSwap()
+  IsContractOwnerOrAdmin
 end
 
 transition TransferSuccessCallBack(sender: ByStr20, recipient: ByStr20, amount: Uint128)
