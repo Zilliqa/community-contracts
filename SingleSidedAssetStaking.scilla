@@ -313,7 +313,12 @@ procedure ClaimRewardsForSnapshotOrError(claim_snapshot: Uint128)
               
               (* set UserSSAS.enter_stake_block == 0 so they can't reclaim for this epoch *)
               claimed_user_ssas = UserSSAS bnum_zero currently_deposited_lktokens;    
-              past_snapshot_pool[claim_snapshot][_sender]:= claimed_user_ssas
+              past_snapshot_pool[claim_snapshot][_sender]:= claimed_user_ssas;
+              
+              e = {_eventname : "ClaimedRewardForEpochSuccess"; epoch :claim_snapshot; 
+              sum_at_epoch: total_sum_at_epoch; user_share_at_epoch: currently_deposited_lktokens; user_share_of_rewards:user_share_of_rewards; 
+              zeroed_claim: claimed_user_ssas };
+              event e
             | None =>
               (* should never get here? *)
               err = SnapshotError;
@@ -471,21 +476,24 @@ transition AdminSendRewards(amount: Uint128)
     modulus_rewards = builtin rem immutable_reward_per_epoch amount;
     is_perfect_division = builtin eq modulus_rewards uint128_zero; 
   *)
-  
-  (* move reward to contract *)
+  (* move reward to contract and update *)
   MoveFungibleTokenFromXToY utc reward_token_contract _sender _this_address amount;
-
   new_rewards_left = builtin add trl amount;
-  total_rewards_left:= new_rewards_left
+  total_rewards_left:= new_rewards_left;
+  e = {_eventname : "AdminSentRewardsSuccess"; amount_sent : amount; contract_held: new_rewards_left};
+  event e
+  
 end
 
 transition AdminReclaimTax()
   IsContractOwnerOrAdmin;
   IsSnapshotTime;
   tta <- total_taxed_amount;
-  (* move tax to admin *)
+  (* move tax to admin amd update  *)
   MoveFungibleTokenFromXToY utc lktoken_contract _sender _this_address tta; 
-  total_taxed_amount:= uint128_zero
+  total_taxed_amount:= uint128_zero;
+  e = {_eventname : "AdminClaimedTaxSuccess"; tax_sent_to_admin : tta; contract_held_now: uint128_zero};
+  event e
 end
 
 transition TransferSuccessCallBack(sender: ByStr20, recipient: ByStr20, amount: Uint128)
