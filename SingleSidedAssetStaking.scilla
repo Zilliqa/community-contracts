@@ -140,25 +140,25 @@ let get_updated_reward_map_if_eligible =
     foldl iter reward_map l 
 
 type Error =
-  | NotContractOwnerOrAdmin
+  | NotContractOwnerOrStagedOwner
   | SenderHasNoRewards
   | SentRewardsNotAMutipleOfRewardPerEpoch
   | MathError  
   | SenderHasNoFundsAtContract
   | IsPaused
-  | AdminNotConfigured
+  | StageOwnerNotConfigured
 
 let make_error =
   fun (result : Error) =>
     let result_code = 
       match result with
-      | NotContractOwnerOrAdmin                 => Int32 -1
+      | NotContractOwnerOrStagedOwner                 => Int32 -1
       | SenderHasNoRewards      => Int32 -2
       | SentRewardsNotAMutipleOfRewardPerEpoch => Int32 -5
       | MathError                => Int32 -6 
       | SenderHasNoFundsAtContract     => Int32 -7
       | IsPaused => Int32 -10
-      | AdminNotConfigured => Int32 -11
+      | StageOwnerNotConfigured => Int32 -11
       end
     in
     { _exception : "Error"; code : result_code; res : result}
@@ -181,78 +181,75 @@ let make_error =
 *)
 contract SingleSidedAssetStaking
 (
-  contract_owner: ByStr20,
-  token_contract: ByStr20 with end, (* potentially could be immutable *)
-  reward_token_contract: ByStr20 with end,
+  inital_contract_owner: ByStr20,
+  token_contract: ByStr20 with contract end, 
+  reward_token_contract: ByStr20 with contract end,
   epoch_period_length: Uint128, (* ~2500bpd * 7d = 17500b as uint *)
   early_leave_tax: Uint128,     (* 10 = 1000 *)
   immutable_reward_per_epoch: Uint128  (* rewarded in total per epoch *) (* immutable *)
 )
 with
-    let is_ok_min = uint128_gt early_leave_tax tax_bps_min in
-    let is_ok_max = uint128_lt early_leave_tax tax_bps_max in 
-    let is_ok = andb is_ok_min is_ok_max in
-    let x = BNum 1 in
-    match is_ok with 
+  let calculated_start_epoch = builtin badd _creation_block epoch_period_length in (* ideally next_epoch_block:= calculated_start_epoch *)
+  let is_valid_min = uint128_gt early_leave_tax tax_bps_min in
+  let is_valid_max = uint128_lt early_leave_tax tax_bps_max in 
+  let is_valid = andb is_valid_min is_valid_max in
+  match is_valid with 
       | True =>
            True
       | False =>
           False
-    end 
+  end 
 =>
 
-field staged_contract_admin: Option ByStr20 = None {ByStr20}
-field paused: Bool = False
-field current_owner: ByStr20  = contract_owner
+field paused: Bool = False (* stops deposits/claimrewards but not withdraws *)
+field current_contract_owner: ByStr20  = inital_contract_owner (* owner of admin functions *)
+field staged_contract_owner: Option ByStr20 = None {ByStr20} (* owner can surrender ownership to an address. 2 step: stage, confirm to set a new current_owner*)
 
 field total_taxed_amount: Uint128 = uint128_zero  (* totals the amount taxed, allows current_owner to withdraw *)
 field total_amount_locked: Uint128 = uint128_zero (* total amount locked by users *)
-field total_rewards_left: Uint128 = uint128_zero (* total amount of rewards deposited *)
+field total_rewards_left: Uint128 = uint128_zero (* total amount of rewards deposited able to be claimed in the future, can be topped-up *)
+field current_early_leave_tax: Uint128 = early_leave_tax (* mutable tax rate on leaving pool before an epoch duration *)
 
-field current_early_leave_tax: Uint128 = early_leave_tax
-(* user_address ->
-                    (enter_stake_block, deposited_tokens*)
-field pool: Map ByStr20 UserSSAS = Emp ByStr20 UserSSAS
-field reward: Map ByStr20 Uint128 = Emp ByStr20 Uint128
+field current_epoch_length: Uint128 = epoch_period_length (* length of an epoch in blocks represented as Uint128 *)
+field next_epoch_block: BNum = _creation_block  (* when should first epoch time be = time_at_deployment+epoch_length*)
 
-(* length of an epoch in blocks represented as Uint128 *)
-field current_epoch_length: Uint128 = epoch_period_length     
-(* the block the next snapshot should be taken *)
-field next_epoch_block: BNum = _creation_block  (* TO DO - now + epoch*)
-
+field pool: Map ByStr20 UserSSAS = Emp ByStr20 UserSSAS (* user_address -> (enter_stake_block, deposited_tokens *) (* stores users deposits*)
+field reward: Map ByStr20 Uint128 = Emp ByStr20 Uint128 (* user_address-> earnt_accum_reward *) (* calculates dynamically reward over time*)
 
 procedure ThrowError(err : Error)
   e = make_error err;
   throw e
 end
 
-procedure IsContractAdmin()
-  maybe_sca <- staged_contract_admin;
-  match maybe_sca with
-    | Some sca =>
-      is_contract_admin = builtin eq sca _sender;
-      match is_contract_admin with
-        | True => 
-        | False =>
-          err = NotContractOwnerOrAdmin;
-          ThrowError err
-      end
-    | None =>
-    err = NotContractOwnerOrAdmin;
-    ThrowError err
-  end
-
-
+procedure IsContractOwner()
+  cco <- current_contract_owner;
+  is_contract_owner = builtin eq cco _sender;
+    match is_contract_owner with
+      | True => 
+      | False =>
+        err = NotContractOwnerOrStagedOwner;
+        ThrowError err
+    end
 end
 
-procedure IsContractOwner()
-  is_contract_owner = builtin eq contract_owner _sender;
-  match is_contract_owner with
-    | True => 
-    | False =>
-      err = NotContractOwnerOrAdmin;
-      ThrowError err
-  end
+procedure ChangeContractOwnershipIfSenderIsStagingOwner()
+  maybe_staged_contract_owner <- staged_contract_owner;
+  match maybe_staged_contract_owner with
+  | Some sca =>
+      caller_is_staged_owner = builtin eq _sender sca;
+      match caller_is_staged_owner with
+      | True =>
+          current_contract_owner := sca;
+          reset_staged_owner = None {ByStr20};
+          staged_contract_owner := reset_staged_owner
+      | False =>
+        err = NotContractOwnerOrStagedOwner;
+        ThrowError err
+      end
+  | None =>  
+    err = StageOwnerNotConfigured;
+    ThrowError err
+  end 
 end
 
 procedure IsNotPaused()
@@ -262,11 +259,10 @@ procedure IsNotPaused()
       err = IsPaused;
       ThrowError err
     | False =>
-
   end
 end
 
-(* moves amount of reward_token_contract from x to y. *)
+(* moves amount of token contract ft from x to y. *)
 procedure MoveFungibleTokenFromXToY(token_move: TokenMove, fungible_contract:ByStr20 with end, from: ByStr20, to: ByStr20, amount: Uint128)
   match token_move with
     | UserToContract =>
@@ -294,19 +290,15 @@ procedure MoveFungibleTokenFromXToY(token_move: TokenMove, fungible_contract:ByS
     end
 end
 
-(* ...ommitting ownership transitions... *)
-
 procedure RewardIfEpoch()
   now <-& BLOCKNUMBER;
   neb <- next_epoch_block;
-  (* is the current block less than the snapshot (the past, will be true on the value of nsbr and future blocks) *)
-  is_future = builtin blt neb now;
-
+  is_future = builtin blt neb now;  (* is the current block less than the snapshot (the past, will be true on the value of nsbr+1 and future blocks) *)
   match is_future with
-    | True => (* equal to and the future *)
-
-      new_neb = builtin badd now epoch_period_length; (* caters for the case where epochs lag behind carries right upto now, so epochs can be longer than epl but the next tx catches it up *)
+    | True => (* now+1 and future blocks *)
+      (* caters for the case where epochs lag behind carries right upto now, so epochs can be longer than epl but the next tx catches it up *)
       (* this will also completely skip epochs if missed, so really a high block count for the epoch is needed to counteract this. *)
+      new_neb = builtin badd now epoch_period_length; 
       reward_map <- reward;
       pool_map <- pool;
       pool_to_list = builtin to_list pool_map;
@@ -392,10 +384,10 @@ transition ClaimRewards()
   now <-& BLOCKNUMBER;
   maybe_reward <- reward[_sender];
   match maybe_reward with
-    | Some reward =>
-        MoveFungibleTokenFromXToY ctu reward_token_contract _this_address _sender reward;
+    | Some user_reward =>
+        MoveFungibleTokenFromXToY ctu reward_token_contract _this_address _sender user_reward;
         e = {_eventname : "ClaimRewardsSuccess"; 
-            rewarded:_sender; amount:reward}; 
+            rewarded:_sender; amount:user_reward}; 
         event e
     | None => 
       err = SenderHasNoRewards;
@@ -408,9 +400,9 @@ end
     If UserSSAS.block_entered_staking + epoch_period_length <= BLOCKNUMBER  (no tax)
     else tax 10% of total_deposit_amount and increment total_taxed_amount
     remove this from the real pool
+    allows withdrawls if paused
 *)
 transition Withdraw()
-  IsNotPaused;
   RewardIfEpoch;
   maybe_exists <- pool[_sender];
    match maybe_exists with
@@ -481,7 +473,7 @@ end
 (*
   Admin can topup rewards and extend contract life if it's a full multiple of the immutable rewards 
 *)
-transition OwnerSendRewards(amount: Uint128)
+transition OwnerTopUpRewards(amount: Uint128)
   IsContractOwner;
   RewardIfEpoch;
   (* use reward_per_epoch to check if the incoming amount is a mutiple, otherwise people will get mad *)
@@ -498,6 +490,7 @@ transition OwnerSendRewards(amount: Uint128)
   event e
   
 end
+
 (*
   allows admin to reclaim total_taxed_amount (tax = tokens)
 *)
@@ -513,7 +506,7 @@ transition OwnerReclaimTax()
 end
 
 (*
-  contract must be paused if admin wants to claim rewards (rewards = reward_token_contract)
+  contract must be paused if current_contract_owner wants to claim rewards (rewards = reward_token_contract) so that users can't
 *)
 transition OwnerReclaimRewards()
   IsContractOwner;
@@ -532,36 +525,50 @@ transition OwnerReclaimRewards()
 end
 
 (*
-  allows admin to toggle pause all interactions
+  allows current_contract_owner to toggle pause all interactions expect withdraws of inital (pauses withdraw of rewards)
 *)
 transition OwnerTogglePause(pause_state: Bool)
   IsContractOwner;
   RewardIfEpoch;
-  paused:=pause_state
+  paused:=pause_state;
+  e = {_eventname : "OwnerTogglePauseSuccess"; new_pause_state: pause_state};
+  event e
 end
 
 (*
-  owner can toggle staged_contract_admin
+  current_contract_owner can stage a new staged_contract_admin address
 *)
-transition RequestDelegatorSwap()
-  IsContractAdmin;
-  RewardIfEpoch
-end
-  
-transition ConfirmDelegatorSwap()
-  IsContractAdmin;
-  RewardIfEpoch
-end
-
-transition RevokeDelegatorSwap()
-  IsContractAdmin;
-  RewardIfEpoch
+transition RequestOwnershipTransfer(new_owner : ByStr20)
+  IsContractOwner;
+  RewardIfEpoch;
+  sca = Some {ByStr20} new_owner;
+  staged_contract_owner := sca;
+  e = {_eventname : "RequestOwnershipTransferSuccess"; staged_contract_owner: sca};
+  event e
 end
 
-transition RejectDelegatorSwap()
-  IsContractAdmin;
-  RewardIfEpoch
+(*
+  after a new staged_contract_admin address is set, that address can claim ownership
+*)
+transition ConfirmOwnershipTransfer()
+  ChangeContractOwnershipIfSenderIsStagingOwner;
+  RewardIfEpoch;
+  e = {_eventname : "ConfirmOwnershipTransferSuccess"; new_contract_owner: _sender};
+  event e
 end
+
+(*
+  after a new staged_contract_admin address is set, the current_contract_owner can revoke this 
+*)
+transition RevokeOwnershipTransfer()
+  IsContractOwner;
+  RewardIfEpoch;
+  reset_staged_owner = None {ByStr20};
+  staged_contract_owner := reset_staged_owner;
+  e = {_eventname : "RevokeDelegatorSwapSuccess"; revoked_by_owner: _sender};
+  event e
+end
+
 
 transition TransferSuccessCallBack(sender: ByStr20, recipient: ByStr20, amount: Uint128)
 end
