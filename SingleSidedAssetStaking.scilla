@@ -5,8 +5,6 @@ import IntUtils BoolUtils ListUtils
 library SingleSidedAssetStaking
 
 let uint128_zero = Uint128 0
-let uint128_one = Uint128 1
-let uint128_hundred = Uint128 100
 let bnum_zero = BNum 0
 let empty_bystr = 0x0000000000000000000000000000000000000000
 
@@ -16,10 +14,6 @@ let tax_bps_max = Uint128 10000 (* 100% *)
 type UserSSAS  =  | UserSSAS of ByStr20 (* user *)
                                 BNum    (* block entered staking *)
                                 Uint128 (* deposited tokens *)
-                                
-type Rewards   =  | Rewards of ByStr20 
-                               Uint128 
-
 
 type TokenMove = | UserToContract | ContractToUser
 let utc        = UserToContract
@@ -81,12 +75,6 @@ let list_sum =
         end 
     in
     foldl iter init l
-    
-let not_reward_event = 
-  fun(user_address: ByStr20) => 
-  fun(min_valid_claim: BNum) =>
-    {_eventname: "NotRewardingAddress"; user_address: user_address; min_valid_claim:min_valid_claim }
-
 (*
   This could be neater / more gas efficent if using key inserts, but functions only allow pure expressions, so we can use put/get here
   This is still a concern for high N. 
@@ -151,19 +139,12 @@ let get_updated_reward_map_if_eligible =
     in
     foldl iter reward_map l 
 
-
-
-(* Error exception *)
 type Error =
   | NotContractOwnerOrAdmin
   | SenderHasNoRewards
-  | SenderWasNotPresentInTheSnapshot
-  | SenderIneligibleForRewardsAtEpoch
   | SentRewardsNotAMutipleOfRewardPerEpoch
   | MathError  
   | SenderHasNoFundsAtContract
-  | SenderHasAlreadyClaimedForEpoch
-  | SnapshotError
   | IsPaused
   | AdminNotConfigured
 
@@ -173,13 +154,9 @@ let make_error =
       match result with
       | NotContractOwnerOrAdmin                 => Int32 -1
       | SenderHasNoRewards      => Int32 -2
-      | SenderWasNotPresentInTheSnapshot => Int32 -3
-      | SenderIneligibleForRewardsAtEpoch => Int32 -4
       | SentRewardsNotAMutipleOfRewardPerEpoch => Int32 -5
       | MathError                => Int32 -6 
       | SenderHasNoFundsAtContract     => Int32 -7
-      | SenderHasAlreadyClaimedForEpoch => Int32 -8
-      | SnapshotError => Int32 -9
       | IsPaused => Int32 -10
       | AdminNotConfigured => Int32 -11
       end
@@ -228,6 +205,10 @@ field staged_contract_admin: Option ByStr20 = None {ByStr20}
 field paused: Bool = False
 field current_owner: ByStr20  = contract_owner
 
+field total_taxed_amount: Uint128 = uint128_zero  (* totals the amount taxed, allows current_owner to withdraw *)
+field total_amount_locked: Uint128 = uint128_zero (* total amount locked by users *)
+field total_rewards_left: Uint128 = uint128_zero (* total amount of rewards deposited *)
+
 field current_early_leave_tax: Uint128 = early_leave_tax
 (* user_address ->
                     (enter_stake_block, deposited_tokens*)
@@ -235,13 +216,10 @@ field pool: Map ByStr20 UserSSAS = Emp ByStr20 UserSSAS
 field reward: Map ByStr20 Uint128 = Emp ByStr20 Uint128
 
 (* length of an epoch in blocks represented as Uint128 *)
-field current_epoch_length: Uint128 = epoch_period_length           (* BNum  *)
+field current_epoch_length: Uint128 = epoch_period_length     
 (* the block the next snapshot should be taken *)
 field next_epoch_block: BNum = _creation_block  (* TO DO - now + epoch*)
 
-field total_taxed_amount: Uint128 = uint128_zero  (* totals the amount taxed, allows current_owner to withdraw *)
-field total_amount_locked: Uint128 = uint128_zero (* total amount locked by users *)
-field total_rewards_left: Uint128 = uint128_zero (* total amount of rewards deposited *)
 
 procedure ThrowError(err : Error)
   e = make_error err;
