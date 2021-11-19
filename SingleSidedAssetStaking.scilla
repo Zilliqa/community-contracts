@@ -58,22 +58,7 @@ let muldiv : Uint128 -> Uint128 -> Uint128 -> Uint128 =
         builtin mul max_uint128 fourtytwo128
       | Some res128 =>
         res128
-      end
-       
-let list_sum =
-  fun (l : List (Pair ByStr20 UserSSAS)) =>
-    let foldl = @list_foldl (Pair ByStr20 UserSSAS) Uint128 in
-    let init = Uint128 0 in
-    let iter =
-      fun (sum : Uint128) =>
-      fun (list_element : Pair ByStr20 UserSSAS) =>
-        match list_element with 
-        | Pair _ (UserSSAS enter_stake_block currently_deposited_tokens) =>
-            builtin add sum currently_deposited_tokens
-        end 
-    in
-    foldl iter init l
-    
+
 let list_sum_if_eligible =
   fun (l : List (Pair ByStr20 UserSSAS)) =>
   fun (epoch_length : Uint128) => (* the current epoch length *)
@@ -206,7 +191,7 @@ with
 =>
 
 field paused: Bool = False (* stops deposits/claimrewards but not withdraws *)
-field current_contract_owner: ByStr20  = inital_contract_owner (* owner of admin functions *)
+field current_contract_owner: ByStr20  = inital_contract_owner (* owner of owner functions *)
 field staged_contract_owner: Option ByStr20 = None {ByStr20} (* owner can surrender ownership to an address. 2 step: stage, confirm to set a new current_owner*)
 
 field total_taxed_amount: Uint128 = uint128_zero  (* totals the amount taxed, allows current_owner to withdraw *)
@@ -527,7 +512,7 @@ transition OwnerChangeTaxLockTime(new_min_tax_time_in_blocks: Uint128)
 end
 
 (*
-  Owner can change the rate in which users are impacted by tax, can be zero
+  Allows owner can change the rate in which users are impacted by tax, can be zero
 *)
 transition OwnerChangeTaxRate(new_tax_rate_in_bps: Uint128) 
   IsContractOwner;
@@ -536,23 +521,24 @@ transition OwnerChangeTaxRate(new_tax_rate_in_bps: Uint128)
   e = {_eventname : "OwnerChangeTaxRateSuccess"; new_tax_rate: new_tax_rate_in_bps};
   event e
 end
+
 (*
-  allows admin to reclaim total_taxed_amount (tax = tokens)
+  Allows owner to reclaim total_taxed_amount (tax = tokens)
 *)
 transition OwnerClaimTax()
   IsContractOwner;
   RewardIfEpoch;
   tta <- total_taxed_amount;
-  (* move tax to admin amd update  *)
+  (* move tax to owner amd update  *)
   MoveFungibleTokenFromXToY ctu token_contract _this_address _sender tta; 
   total_taxed_amount:= uint128_zero;
-  e = {_eventname : "OwnerClaimTaxSuccess"; tax_sent_to_admin : tta; contract_held_now: uint128_zero};
+  e = {_eventname : "OwnerClaimTaxSuccess"; tax_sent_to_owner : tta; contract_held_now: uint128_zero};
   event e
 end
 
 
 (*
-  contract must be paused if current_contract_owner wants to claim rewards (rewards = reward_token_contract) so that users can't
+  Contract must be paused if current_contract_owner wants to claim rewards (rewards = reward_token_contract) so that users can't
 *)
 transition OwnerReclaimRewards()
   IsContractOwner;
@@ -561,7 +547,7 @@ transition OwnerReclaimRewards()
   match is_paused with
     | True =>
       trl <- total_rewards_left;
-      (* move rewards to admin amd update  *)
+      (* move rewards to owner amd update  *)
       MoveFungibleTokenFromXToY ctu reward_token_contract _this_address _sender trl; 
       total_rewards_left:= uint128_zero;
       e = {_eventname : "OwnerReclaimRewardsSuccess"; rewards_taken:trl; contract_held_now: uint128_zero};
@@ -582,7 +568,7 @@ transition OwnerTogglePause(pause_state: Bool)
 end
 
 (*
-  current_contract_owner can stage a new staged_contract_admin address
+  current_contract_owner can stage a new staged_contract_owner address
 *)
 transition RequestOwnershipTransfer(new_owner : ByStr20)
   IsContractOwner;
@@ -594,7 +580,7 @@ transition RequestOwnershipTransfer(new_owner : ByStr20)
 end
 
 (*
-  after a new staged_contract_admin address is set, that address can claim ownership
+  after a new staged_contract_owner is set, that address can claim ownership
 *)
 transition ConfirmOwnershipTransfer()
   ChangeContractOwnershipIfSenderIsStagingOwner;
@@ -604,7 +590,7 @@ transition ConfirmOwnershipTransfer()
 end
 
 (*
-  after a new staged_contract_admin address is set, the current_contract_owner can revoke this 
+  after a new staged_contract_owner address is set, the current_contract_owner can revoke this 
 *)
 transition RevokeOwnershipTransfer()
   IsContractOwner;
