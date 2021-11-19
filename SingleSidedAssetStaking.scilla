@@ -179,7 +179,7 @@ contract SingleSidedAssetStaking
 with
   let is_valid_min = uint128_gt early_leave_tax tax_bps_min in
   let is_valid_max = uint128_lt early_leave_tax tax_bps_max in 
-  let is_valid = andb is_valid_min is_valid_max in
+  andb is_valid_min is_valid_max 
 =>
 
 field paused: Bool = False (* stops deposits/claimrewards but not withdraws *)
@@ -416,7 +416,7 @@ transition Withdraw(withdraw_amount: Uint128)
                     is_zero = builtin eq currently_deposited_tokens withdraw_amount;
                     match is_zero with (* cleanup *)
                       | True => 
-                        delete pool[_sender];
+                        delete pool[_sender]
                       | False => 
                     end;
                     (* withdraw with tax success *)
@@ -439,7 +439,7 @@ transition Withdraw(withdraw_amount: Uint128)
                 is_zero = builtin eq currently_deposited_tokens withdraw_amount;
                 match is_zero with (* cleanup *)
                   | True => 
-                    delete pool[_sender];
+                    delete pool[_sender]
                   | False => 
                 end;
                 (* withdraw with tax success *)
@@ -457,7 +457,7 @@ transition Withdraw(withdraw_amount: Uint128)
 end
 
 (*
-  Admin can topup rewards and extend contract life if it's a full multiple of the immutable rewards 
+  Owner can topup rewards and extend contract life if it's a full multiple of the immutable rewards 
 *)
 transition OwnerTopUpRewards(amount: Uint128)
   IsContractOwner;
@@ -472,23 +472,55 @@ transition OwnerTopUpRewards(amount: Uint128)
   MoveFungibleTokenFromXToY utc reward_token_contract _sender _this_address amount;
   new_rewards_left = builtin add trl amount;
   total_rewards_left:= new_rewards_left;
-  e = {_eventname : "AdminSentRewardsSuccess"; amount_sent : amount; contract_held: new_rewards_left};
+  e = {_eventname : "OwnerTopUpRewardsSuccess"; amount_sent : amount; contract_held: new_rewards_left};
   event e
 end
 
 (*
+  Owner can change the minimum time that users are impacted by tax 
+*)
+transition OwnerChangeTaxLockTime(new_min_tax_time_in_blocks: Uint128)
+  IsContractOwner;
+  RewardIfEpoch;
+  current_minimum_lock_time_no_tax := new_min_tax_time_in_blocks;
+  e = {_eventname : "OwnerChangeTaxLockTimeSuccess"; new_tax_time: new_min_tax_time_in_blocks};
+  event e
+end
+
+(*
+  Owner can change the rate in which users are impacted by tax 
+*)
+transition OwnerChangeTaxRate(new_tax_rate_in_bps: Uint128) 
+  IsContractOwner;
+  RewardIfEpoch;
+  is_valid_min = uint128_gt new_tax_rate_in_bps tax_bps_min;
+  is_valid_max = uint128_lt new_tax_rate_in_bps tax_bps_max;
+  is_valid = andb is_valid_min is_valid_max;
+  match is_valid with
+    | True =>
+      current_early_leave_tax := new_tax_rate_in_bps;
+      e = {_eventname : "OwnerChangeTaxRateSuccess"; new_tax_rate: new_tax_rate_in_bps};
+      event e
+    | False =>
+      err = MathError;
+      ThrowError err
+  end
+end
+(*
   allows admin to reclaim total_taxed_amount (tax = tokens)
 *)
-transition OwnerReclaimTax()
+transition OwnerClaimTax()
   IsContractOwner;
   RewardIfEpoch;
   tta <- total_taxed_amount;
   (* move tax to admin amd update  *)
   MoveFungibleTokenFromXToY ctu token_contract _this_address _sender tta; 
   total_taxed_amount:= uint128_zero;
-  e = {_eventname : "AdminClaimedTaxSuccess"; tax_sent_to_admin : tta; contract_held_now: uint128_zero};
+  e = {_eventname : "OwnerClaimTaxSuccess"; tax_sent_to_admin : tta; contract_held_now: uint128_zero};
   event e
 end
+
+
 
 (*
   contract must be paused if current_contract_owner wants to claim rewards (rewards = reward_token_contract) so that users can't
@@ -500,10 +532,10 @@ transition OwnerReclaimRewards()
   match is_paused with
     | True =>
       trl <- total_rewards_left;
-      (* move tax to admin amd update  *)
+      (* move rewards to admin amd update  *)
       MoveFungibleTokenFromXToY ctu reward_token_contract _this_address _sender trl; 
       total_rewards_left:= uint128_zero;
-      e = {_eventname : "AdminClaimRewardsSuccess"; rewards_taken:trl; contract_held_now: uint128_zero};
+      e = {_eventname : "OwnerReclaimRewardsSuccess"; rewards_taken:trl; contract_held_now: uint128_zero};
       event e
     | False =>
   end
