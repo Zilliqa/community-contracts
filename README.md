@@ -8,7 +8,7 @@ Single Sided Asset Staking is locking up a fungible token and being returned an 
 
 A ZRC-2 fungible token.
 
-We will be calling Transfer/TransferTo and the respective allowance mechanism to move the fungible tokens into  tokens.
+We will be calling Transfer/TransferFrom and the respective allowance mechanism to move the fungible tokens into and from the contract, simiarly the admin will transfer rewards to the contract for users to consume.
 
 ### SingleSidedAssetStaking.scilla
 
@@ -176,3 +176,6 @@ Owner can change the current tax timer value.
 
 * withdrawing a deposit stake less than Uint128 10 cannot be taxed when eligible
   * Add minimum stake? 
+
+* Make epoch length and eligiblity time distinct fields
+  * so that you can be eligible between an epoch you joined and the next epoch is rewarded 

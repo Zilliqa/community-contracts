@@ -58,7 +58,8 @@ let muldiv : Uint128 -> Uint128 -> Uint128 -> Uint128 =
         builtin mul max_uint128 fourtytwo128
       | Some res128 =>
         res128
-
+      end
+        
 let list_sum_if_eligible =
   fun (l : List (Pair ByStr20 UserSSAS)) =>
   fun (epoch_length : Uint128) => (* the current epoch length *)
@@ -150,25 +151,28 @@ let get_updated_reward_map_if_eligible =
     foldl iter reward_map l 
 
 type Error =
-  | NotContractOwnerOrStagedOwner
+  | NotContractOwner  
+  | NotStagingOwner
+  | StagingOwnerNotConfigured 
   | SenderHasNoRewards
-  | SentRewardsNotAMutipleOfRewardPerEpoch
-  | MathError  
   | SenderHasNoFundsAtContract
-  | IsPaused
-  | StageOwnerNotConfigured
+  | SentRewardsNotAMutipleOfRewardPerEpoch
+  | MathError
+  | ContractIsPaused
 
 let make_error =
   fun (result : Error) =>
     let result_code = 
       match result with
-      | NotContractOwnerOrStagedOwner                 => Int32 -1
-      | SenderHasNoRewards                            => Int32 -2
-      | SentRewardsNotAMutipleOfRewardPerEpoch        => Int32 -3
-      | MathError                                     => Int32 -4 
+      | NotContractOwner                              => Int32 -1
+      | NotStagingOwner                               => Int32 -2
+      | StagingOwnerNotConfigured                     => Int32 -3
+      | SenderHasNoRewards                            => Int32 -4
       | SenderHasNoFundsAtContract                    => Int32 -5
-      | IsPaused                                      => Int32 -6
-      | StageOwnerNotConfigured                       => Int32 -7
+      | SentRewardsNotAMutipleOfRewardPerEpoch        => Int32 -6
+      | MathError                                     => Int32 -7 
+      | ContractIsPaused                              => Int32 -8
+
       end
     in
     { _exception : "Error"; code : result_code; res : result}
@@ -177,12 +181,12 @@ let make_error =
 contract SingleSidedAssetStaking
 (
   inital_contract_owner: ByStr20,
-  token_contract: ByStr20 with contract end, 
+  stake_token_contract: ByStr20 with contract end, 
   reward_token_contract: ByStr20 with contract end,
-  epoch_period_length: Uint128, (* ~2500bpd * 7d = 17500b as uint - time to rewards *)
+  epoch_calculation_period_length: Uint128, (* ~2500bpd * 7d = 17500b as uint - time to rewards *)
   minimum_lock_time_no_tax: Uint128, (* 3d as uint - time to leave with no tax *)
-  early_leave_tax: Uint128,     (* 10 = 1000 *)
-  immutable_reward_per_epoch: Uint128  (* rewarded in total per epoch *) (* immutable *)
+  early_leave_tax: Uint128,     (* 10% = 1000bps *)
+  immutable_reward_per_epoch: Uint128  (* rewarded in total per epoch *)
 )
 with
   let is_valid_min = uint128_gt early_leave_tax tax_bps_min in
@@ -199,8 +203,8 @@ field total_amount_locked: Uint128 = uint128_zero (* total amount locked by user
 field total_rewards_left: Uint128 = uint128_zero (* total amount of rewards deposited able to be claimed in the future, can be topped-up *)
 field current_early_leave_tax: Uint128 = early_leave_tax (* mutable tax rate on leaving pool before an epoch duration *)
 field current_minimum_lock_time_no_tax: Uint128 = minimum_lock_time_no_tax (* mutable minimum time to leave pool without being taxed*)
-field current_epoch_length: Uint128 = epoch_period_length (* length of an epoch in blocks represented as Uint128 *)
-field next_epoch_block: BNum = _creation_block  (* when should first epoch time be = time_at_deployment+epoch_length*)
+field current_epoch_length: Uint128 = epoch_calculation_period_length (* length of an epoch in blocks represented as Uint128 *)
+field next_epoch_block: BNum = builtin badd _creation_block epoch_calculation_period_length (* when should first epoch time be = time_at_deployment+epoch_length*)
 
 field pool: Map ByStr20 UserSSAS = Emp ByStr20 UserSSAS (* user_address -> (enter_stake_block, deposited_tokens *) (* stores users deposits*)
 field reward: Map ByStr20 Uint128 = Emp ByStr20 Uint128 (* user_address-> earnt_accum_reward *) (* calculates dynamically reward over time*)
@@ -216,7 +220,7 @@ procedure IsContractOwner()
     match is_contract_owner with
       | True => 
       | False =>
-        err = NotContractOwnerOrStagedOwner;
+        err = NotContractOwner;
         ThrowError err
     end
 end
@@ -224,19 +228,19 @@ end
 procedure ChangeContractOwnershipIfSenderIsStagingOwner()
   maybe_staged_contract_owner <- staged_contract_owner;
   match maybe_staged_contract_owner with
-  | Some sca =>
-      caller_is_staged_owner = builtin eq _sender sca;
+  | Some staged_contract_owner =>
+      caller_is_staged_owner = builtin eq _sender staged_contract_owner;
       match caller_is_staged_owner with
       | True =>
-          current_contract_owner := sca;
+          current_contract_owner := staged_contract_owner;
           reset_staged_owner = None {ByStr20};
           staged_contract_owner := reset_staged_owner
       | False =>
-        err = NotContractOwnerOrStagedOwner;
+        err = NotStagingOwner;
         ThrowError err
       end
   | None =>  
-    err = StageOwnerNotConfigured;
+    err = StagingOwnerNotConfigured;
     ThrowError err
   end 
 end
@@ -245,13 +249,16 @@ procedure IsNotPaused()
   is_paused <- paused;
   match is_paused with
     | True => 
-      err = IsPaused;
+      err = ContractIsPaused;
       ThrowError err
     | False =>
   end
 end
 
-(* moves amount of token contract ft from x to y. *)
+(* @dev: Move an amount of fungible tokens from a particular contract either to the user or from the user *)
+(* @Requirements: *)
+(* - `fungible_contract` should have an allowance with this contract address otherwise an `CodeInsufficientAllowance` error is thrown *)
+(* - `amount` should have an equal to or less spender allowance otherwise an `CodeInsufficientFunds` error is thrown *)
 procedure MoveFungibleTokenFromXToY(token_move: TokenMove, fungible_contract:ByStr20 with end, from: ByStr20, to: ByStr20, amount: Uint128)
   match token_move with
     | UserToContract =>
@@ -265,7 +272,6 @@ procedure MoveFungibleTokenFromXToY(token_move: TokenMove, fungible_contract:ByS
           };
         msgs = one_msg transfer_to_contract;
         send msgs
-        
     | ContractToUser =>
         transfer_to_user = {
           _tag: "Transfer";
@@ -279,50 +285,50 @@ procedure MoveFungibleTokenFromXToY(token_move: TokenMove, fungible_contract:ByS
     end
 end
 
+(* @dev: Triggered when now >= next_epoch_block. If eligible, dynamically calculates and sets users rewards for an epoch into 'reward'  *)
+(* @Requirements: *)
+(* To be eligible for rewards when this is ran. Users have to be deposted for (enter_stake_block + epoch_length) *)
 procedure RewardIfEpoch()
   now <-& BLOCKNUMBER;
-  neb <- next_epoch_block;
-  is_future = builtin blt neb now;  (* is the current block less than the snapshot (the past, will be true on the value of nsbr+1 and future blocks) *)
-  match is_future with
+  epoch_block <- next_epoch_block;
+  epoch_length <- current_epoch_length;
+  is_time_to_reward = builtin blt epoch_block now;  
+  match is_time_to_reward with
     | True => (* now+1 and future blocks *)
       (* caters for the case where epochs lag behind carries right upto now, so epochs can be longer than epl but the next tx catches it up *)
       (* this will also completely skip epochs if missed, so really a high block count for the epoch is needed to counteract this. *)
-      new_neb = builtin badd now epoch_period_length; 
+      new_epoch_block = builtin badd now epoch_length; 
       reward_map <- reward;
       pool_map <- pool;
       pool_to_list = builtin to_list pool_map;
-      sum_at_epoch = list_sum_if_eligible pool_to_list epoch_period_length now; 
-      
-      new_reward_map = get_updated_reward_map_if_eligible pool_to_list sum_at_epoch now epoch_period_length immutable_reward_per_epoch reward_map;
-      reward:=  new_reward_map;
-      next_epoch_block:= new_neb; 
-
+      sum_at_epoch = list_sum_if_eligible pool_to_list epoch_length now; 
+      new_reward_map = get_updated_reward_map_if_eligible pool_to_list sum_at_epoch now epoch_length immutable_reward_per_epoch reward_map;
+      reward := new_reward_map;
+      next_epoch_block := new_epoch_block; 
       e = {_eventname : "SnapshotSuccess"; 
-           now:now; processed_epoch:neb; next_epoch: new_neb };
+           now:now; processed_epoch:epoch_block; next_epoch: new_epoch_block };
       event e
-
     | False => (* the past *)
-      blocks_till_trigger = builtin bsub now neb;
+      blocks_till_trigger = builtin bsub now epoch_block;
       e = {_eventname : "NotSnapshotTime";
-           now: now; next_epoch:neb; blocks_till_trigger:blocks_till_trigger
+           now: now; next_epoch:epoch_block; blocks_till_trigger:blocks_till_trigger
       };
       event e
   end
 end
 
-(*
-  Allows a user to deposit an amount of tokens into the contract
-  On increasing an already existing deposit, a new tax_threshold block is generated and you restart your tax-free duration starting from this_block
-  Bug - user deposits Uint128 less than 10 
-*)
+(* @dev: Allows a user to deposit an amount of tokens into the contract *)
+(* @dev: On increasing an already existing deposit, a new tax_threshold block is generated and you restart your tax-free duration starting from this_block *)
+(* @Requirements: *)
+(* - `fungible_contract` should have an allowance with this contract address otherwise an `CodeInsufficientAllowance` error is thrown *)
+(* - `deposit_amount` should have an equal to or less spender allowance otherwise an `CodeInsufficientFunds` error is thrown *)
 transition Deposit(deposit_amount: Uint128)
   IsNotPaused;
   now <-& BLOCKNUMBER;
   maybe_exists <- pool[_sender];
-  cel <- current_epoch_length;
-  tal <- total_amount_locked;
-  deposit_lock_duration = builtin badd now cel;
-  
+  epoch_length <- current_epoch_length;
+  amount_locked <- total_amount_locked;
+  deposit_lock_duration = builtin badd now epoch_length;
   match maybe_exists with
     | Some some_user_ssas => (* user already exists, increase amount of tokens *)
       match some_user_ssas with
@@ -333,38 +339,32 @@ transition Deposit(deposit_amount: Uint128)
                                  new_deposited_tokens;    (* addition to tokens staked    *)
             
             (* move tokens to contract *)
-            MoveFungibleTokenFromXToY utc token_contract _sender _this_address deposit_amount; (* deposit amount. not recalculated addition*)
+            MoveFungibleTokenFromXToY utc stake_token_contract _sender _this_address deposit_amount; (* deposit amount. not recalculated addition*)
             
             pool[_sender] := user_ssas;
-            new_tal = builtin add tal deposit_amount;
-            total_amount_locked := new_tal;
-            
+            new_amount_locked = builtin add amount_locked deposit_amount;
+            total_amount_locked := new_amount_locked;
             e = {_eventname : "IncreasingDepositSuccess"; user_ssas : user_ssas };
             event e
-            
         end
     | None => (* user doesn't exist, initalise ssas *)
-    
       user_ssas = UserSSAS deposit_lock_duration (* new lock duration     *)
                            deposit_amount;       (* inital deposit amount *)
                            
-      MoveFungibleTokenFromXToY utc token_contract _sender _this_address deposit_amount;
+      MoveFungibleTokenFromXToY utc stake_token_contract _sender _this_address deposit_amount;
             
       pool[_sender] := user_ssas;
-      new_tal = builtin add tal deposit_amount;
-      total_amount_locked := new_tal;
-      
+      new_amount_locked = builtin add amount_locked deposit_amount;
+      total_amount_locked := new_amount_locked;
       e = {_eventname : "InitalDepositSuccess"; user_ssas : user_ssas };
       event e
   end;
-  RewardIfEpoch (* for a deposit this needs to go at the end, so that any eligible users, if depositing and is the epoch snapshot, become ineligible
-                   after the block time is updated *)
+  RewardIfEpoch (* for a deposit this needs to go at the end, so that any eligible users, if depositing and is the epoch snapshot, become ineligible after the block time is updated *)
 end
 
-
-(*
-  Given a user claims for some rewards, if they have 
-*)
+(* @dev: Allows a user to claim all accumulated rewards they are eligible for *)
+(* @Requirements: *)
+(* - `reward[_sender]` should have a users address present with some reward, otherwise an `CodeInsufficientAllowance` error is thrown *)
 transition ClaimRewards()
   IsNotPaused;
   RewardIfEpoch;
@@ -376,7 +376,7 @@ transition ClaimRewards()
         delete reward[_sender];
         trl <- total_rewards_left;
         new_trl = builtin sub trl user_reward;
-        total_rewards_left:= new_trl;
+        total_rewards_left := new_trl;
         e = {_eventname : "ClaimRewardsSuccess"; 
             rewarded:_sender; amount:user_reward}; 
         event e
@@ -386,13 +386,14 @@ transition ClaimRewards()
   end
 end
 
-(*
-    Allows a user to leave the ssas pool
-    If UserSSAS.block_entered_staking + tax_free_threshold <= BLOCKNUMBER  (no tax)
-    else tax 10% of total_deposit_amount and increment total_taxed_amount
-    remove this from the real pool
-    allows withdrawls if paused
-*)
+(* @dev: Allows a user to leave the ssas pool, returning their original stake to them *)
+(* @dev: If UserSSAS.block_entered_staking + tax_free_threshold <= BLOCKNUMBER then no tax, else tax 10% of total_deposit_amount and increment total_taxed_amount *)
+(* @dev: Allows withdrawls if paused *)
+(* @Requirements: *)
+(* - `pool[_sender]` should have a users address present otherwise an `SenderHasNoFundsAtContract` error is thrown *)
+(* - `tax_amount_as_uint256` has the potential to overflow, if so, a `MathError` error is thrown *)
+(* - `withdraw_amount` should be equal to or larger than Uint128 10 otherwise tax cannot be applied *)
+(* - ``, otherwise an `SenderHasNoFundsAtContract` error is thrown *)
 transition Withdraw(withdraw_amount: Uint128)
   RewardIfEpoch;
   maybe_exists <- pool[_sender];
@@ -401,30 +402,28 @@ transition Withdraw(withdraw_amount: Uint128)
       match some_user_ssas with
         | UserSSAS enter_stake_block currently_deposited_tokens =>
             now <-& BLOCKNUMBER;
-            mlt <- current_minimum_lock_time_no_tax;
-            tax_free_threshold = builtin badd enter_stake_block mlt; (* calc tax_free block *)
+            min_block_time_no_tax <- current_minimum_lock_time_no_tax;
+            tax_free_threshold = builtin badd enter_stake_block min_block_time_no_tax; (* calc tax_free block *)
             is_taxable = builtin blt now tax_free_threshold; (* is now in the past compared to threshold *)
             match is_taxable with
-              | True => 
-                (* tax 10% of users deposit *)
+              | True => (* tax 10% of users deposit *)
                 early_leave_tax_bps <- current_early_leave_tax;
                 x = builtin div tax_bps_max early_leave_tax_bps; 
                 tax_amount_as_uint256 = builtin div withdraw_amount x;
                 maybe_tax_amount = builtin to_uint128 tax_amount_as_uint256;
                 match maybe_tax_amount with 
-                 | Some tax_amount => 
-                    (* calculate tax *)
+                 | Some tax_amount => (* calculate tax *)
                     currently_deposited_tokens_after_tax = builtin sub withdraw_amount tax_amount; 
                     (* increase contract allowance for tax *)
-                    txa <- total_taxed_amount;
-                    new_txa = builtin add txa tax_amount;
-                    total_taxed_amount:= new_txa;
+                    total_taxed <- total_taxed_amount;
+                    new_total_taxed = builtin add total_taxed tax_amount;
+                    total_taxed_amount := new_total_taxed;
                     (* decrease total amount locked by withdraw amount *)
-                    tal <- total_amount_locked;
-                    new_tal = builtin sub tal currently_deposited_tokens_after_tax;
-                    total_amount_locked:= new_tal;
+                    amount_locked <- total_amount_locked;
+                    new_amount_locked = builtin sub amount_locked currently_deposited_tokens_after_tax;
+                    total_amount_locked:= new_amount_locked;
                     (* move tokens to user *)
-                    MoveFungibleTokenFromXToY ctu token_contract _this_address _sender currently_deposited_tokens_after_tax; (* deposit amount. not recalculated addition*)
+                    MoveFungibleTokenFromXToY ctu stake_token_contract _this_address _sender currently_deposited_tokens_after_tax; (* deposit amount. not recalculated addition*)
                     (* remove from pool*)
                     is_zero = builtin eq currently_deposited_tokens withdraw_amount;
                     match is_zero with (* cleanup *)
@@ -443,11 +442,11 @@ transition Withdraw(withdraw_amount: Uint128)
                 end 
               | False => (* tax free *)
                 (* decrease total amount locked by withdraw amount *)
-                tal <- total_amount_locked;
-                new_tal = builtin sub tal withdraw_amount;
-                total_amount_locked:= new_tal;
+                amount_locked <- total_amount_locked;
+                new_amount_locked = builtin sub amount_locked withdraw_amount;
+                total_amount_locked:= new_amount_locked;
                 (* move tokens to user *)
-                MoveFungibleTokenFromXToY ctu token_contract _this_address _sender withdraw_amount; (* deposit amount. not recalculated addition*)
+                MoveFungibleTokenFromXToY ctu stake_token_contract _this_address _sender withdraw_amount; (* deposit amount. not recalculated addition*)
                 (* remove from pool*)
                 is_zero = builtin eq currently_deposited_tokens withdraw_amount;
                 match is_zero with (* cleanup *)
@@ -469,29 +468,41 @@ transition Withdraw(withdraw_amount: Uint128)
   end
 end
 
-(*
-  Owner can topup rewards and extend contract life if it's a full multiple of the immutable rewards 
-*)
+
+(* @dev:   Owner can topup the amount of rewards and extend the contract life.  *)
+(* @Requirements: *)
+(* - `` Amount should if it's a full multiple of the immutable rewards, otherwise an `???` error is thrown *)
 transition OwnerTopUpRewards(amount: Uint128)
   IsContractOwner;
   RewardIfEpoch;
-  (* use reward_per_epoch to check if the incoming amount is a mutiple, otherwise people will get mad *)
-  trl <- total_rewards_left;
+  (* use reward_per_epoch to check if the incoming amount is a mutiple, otherwise people will get mad with a partial reward
+     so is reward is 100Z, this should accept 200Z, 300Z...*)
+  rewards_left <- total_rewards_left;
   (*
     modulus_rewards = builtin rem immutable_reward_per_epoch amount;
     is_perfect_division = builtin eq modulus_rewards uint128_zero; 
   *)
   (* move reward to contract and update *)
   MoveFungibleTokenFromXToY utc reward_token_contract _sender _this_address amount;
-  new_rewards_left = builtin add trl amount;
+  new_rewards_left = builtin add rewards_left amount;
   total_rewards_left:= new_rewards_left;
   e = {_eventname : "OwnerTopUpRewardsSuccess"; amount_sent : amount; contract_held: new_rewards_left};
   event e
 end
 
 (*
-  Owner can change the time that a reward calculation is performed, can be zero
+  
 *)
+
+(* @dev: Owner can change the time that a reward calculation is performed, can be zero  *)
+(* @dev: Implications of a short epoch time are that users are eligible for rewards and therefore more calculations and gas is required  *)
+(* @dev: This could expend contract funds quickly if a large reward is set. *)
+(* @dev: Implications of a long epoch time are that when a similar  *)
+(* @Requirements: *)
+(* - `pool[_sender]` should have a users address present otherwise an `SenderHasNoFundsAtContract` error is thrown *)
+(* - `tax_amount_as_uint256` has the potential to overflow, if so, a `MathError` error is thrown *)
+(* - `withdraw_amount` should be equal to or larger than Uint128 10 otherwise tax cannot be applied *)
+(* - `` Amount should if it's a full multiple of the immutable rewards, otherwise an `???` error is thrown *)
 transition OwnerChangeEpochLength(new_epoch_length: Uint128)
   IsContractOwner;
   RewardIfEpoch;
@@ -530,8 +541,8 @@ transition OwnerClaimTax()
   RewardIfEpoch;
   tta <- total_taxed_amount;
   (* move tax to owner amd update  *)
-  MoveFungibleTokenFromXToY ctu token_contract _this_address _sender tta; 
-  total_taxed_amount:= uint128_zero;
+  MoveFungibleTokenFromXToY ctu stake_token_contract _this_address _sender tta; 
+  total_taxed_amount := uint128_zero;
   e = {_eventname : "OwnerClaimTaxSuccess"; tax_sent_to_owner : tta; contract_held_now: uint128_zero};
   event e
 end
@@ -549,7 +560,7 @@ transition OwnerReclaimRewards()
       trl <- total_rewards_left;
       (* move rewards to owner amd update  *)
       MoveFungibleTokenFromXToY ctu reward_token_contract _this_address _sender trl; 
-      total_rewards_left:= uint128_zero;
+      total_rewards_left := uint128_zero;
       e = {_eventname : "OwnerReclaimRewardsSuccess"; rewards_taken:trl; contract_held_now: uint128_zero};
       event e
     | False =>
@@ -562,7 +573,7 @@ end
 transition OwnerTogglePause(pause_state: Bool)
   IsContractOwner;
   RewardIfEpoch;
-  paused:=pause_state;
+  paused := pause_state;
   e = {_eventname : "OwnerTogglePauseSuccess"; new_pause_state: pause_state};
   event e
 end
@@ -573,9 +584,9 @@ end
 transition RequestOwnershipTransfer(new_owner : ByStr20)
   IsContractOwner;
   RewardIfEpoch;
-  sca = Some {ByStr20} new_owner;
-  staged_contract_owner := sca;
-  e = {_eventname : "RequestOwnershipTransferSuccess"; staged_contract_owner: sca};
+  new_empty_staging = Some {ByStr20} new_owner;
+  staged_contract_owner := new_empty_staging;
+  e = {_eventname : "RequestOwnershipTransferSuccess"; staged_contract_owner: new_empty_staging};
   event e
 end
 
@@ -586,18 +597,6 @@ transition ConfirmOwnershipTransfer()
   ChangeContractOwnershipIfSenderIsStagingOwner;
   RewardIfEpoch;
   e = {_eventname : "ConfirmOwnershipTransferSuccess"; new_contract_owner: _sender};
-  event e
-end
-
-(*
-  after a new staged_contract_owner address is set, the current_contract_owner can revoke this 
-*)
-transition RevokeOwnershipTransfer()
-  IsContractOwner;
-  RewardIfEpoch;
-  reset_staged_owner = None {ByStr20};
-  staged_contract_owner := reset_staged_owner;
-  e = {_eventname : "RevokeDelegatorSwapSuccess"; revoked_by_owner: _sender};
   event e
 end
 
