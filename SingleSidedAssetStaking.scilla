@@ -73,6 +73,31 @@ let list_sum =
         end 
     in
     foldl iter init l
+    
+let list_sum_if_eligible =
+  fun (l : List (Pair ByStr20 UserSSAS)) =>
+  fun (epoch_length : Uint128) => (* the current epoch length *)
+  fun (now : BNum) => (* now in btime*)
+    let foldl = @list_foldl (Pair ByStr20 UserSSAS) Uint128 in
+    let init = Uint128 0 in
+    let iter =
+      fun (sum : Uint128) =>
+      fun (list_element : Pair ByStr20 UserSSAS) =>
+        match list_element with 
+        | Pair _ (UserSSAS enter_stake_block currently_deposited_tokens) =>
+          let user_address = let fst_string_bystr20 = @fst ByStr20 UserSSAS in fst_string_bystr20 list_element in
+          let min_valid_claim = builtin badd enter_stake_block epoch_length in
+          let is_past = builtin blt now min_valid_claim in 
+            match is_past with
+              | False => (* claiming for an eligble staking duration period *)
+                 builtin add sum currently_deposited_tokens
+              | True =>
+                sum
+            end
+        end 
+    in
+    foldl iter init l
+          
 (*
   This could be neater / more gas efficent if using key inserts, but functions only allow pure expressions, so we can use put/get here
   This is still a concern for high N. 
@@ -283,7 +308,7 @@ procedure RewardIfEpoch()
       reward_map <- reward;
       pool_map <- pool;
       pool_to_list = builtin to_list pool_map;
-      sum_at_epoch = list_sum pool_to_list;
+      sum_at_epoch = list_sum_if_eligible pool_to_list epoch_period_length now; 
       
       new_reward_map = get_updated_reward_map_if_eligible pool_to_list sum_at_epoch now epoch_period_length immutable_reward_per_epoch reward_map;
       reward:=  new_reward_map;
@@ -305,6 +330,7 @@ end
 (*
   Allows a user to deposit an amount of tokens into the contract
   On increasing an already existing deposit, a new tax_threshold block is generated and you restart your tax-free duration starting from this_block
+  Bug - user deposits Uint128 less than 10 
 *)
 transition Deposit(deposit_amount: Uint128)
   IsNotPaused;
@@ -396,7 +422,7 @@ transition Withdraw(withdraw_amount: Uint128)
                 (* tax 10% of users deposit *)
                 early_leave_tax_bps <- current_early_leave_tax;
                 x = builtin div tax_bps_max early_leave_tax_bps; 
-                tax_amount_as_uint256 = builtin div withdraw_amount x; (* simplify with muldiv *)
+                tax_amount_as_uint256 = builtin div withdraw_amount x;
                 maybe_tax_amount = builtin to_uint128 tax_amount_as_uint256;
                 match maybe_tax_amount with 
                  | Some tax_amount => 
@@ -477,7 +503,18 @@ transition OwnerTopUpRewards(amount: Uint128)
 end
 
 (*
-  Owner can change the minimum time that users are impacted by tax 
+  Owner can change the time that a reward calculation is performed, can be zero
+*)
+transition OwnerChangeEpochLength(new_epoch_length: Uint128)
+  IsContractOwner;
+  RewardIfEpoch;
+  current_epoch_length := new_epoch_length;
+  e = {_eventname : "OwnerChangeEpochLengthSuccess"; new_epoch_length: new_epoch_length};
+  event e
+end
+
+(*
+  Owner can change the minimum time that users are impacted by tax, can be zero
 *)
 transition OwnerChangeTaxLockTime(new_min_tax_time_in_blocks: Uint128)
   IsContractOwner;
@@ -488,23 +525,14 @@ transition OwnerChangeTaxLockTime(new_min_tax_time_in_blocks: Uint128)
 end
 
 (*
-  Owner can change the rate in which users are impacted by tax 
+  Owner can change the rate in which users are impacted by tax, can be zero
 *)
 transition OwnerChangeTaxRate(new_tax_rate_in_bps: Uint128) 
   IsContractOwner;
   RewardIfEpoch;
-  is_valid_min = uint128_gt new_tax_rate_in_bps tax_bps_min;
-  is_valid_max = uint128_lt new_tax_rate_in_bps tax_bps_max;
-  is_valid = andb is_valid_min is_valid_max;
-  match is_valid with
-    | True =>
-      current_early_leave_tax := new_tax_rate_in_bps;
-      e = {_eventname : "OwnerChangeTaxRateSuccess"; new_tax_rate: new_tax_rate_in_bps};
-      event e
-    | False =>
-      err = MathError;
-      ThrowError err
-  end
+  current_early_leave_tax := new_tax_rate_in_bps;
+  e = {_eventname : "OwnerChangeTaxRateSuccess"; new_tax_rate: new_tax_rate_in_bps};
+  event e
 end
 (*
   allows admin to reclaim total_taxed_amount (tax = tokens)
@@ -519,7 +547,6 @@ transition OwnerClaimTax()
   e = {_eventname : "OwnerClaimTaxSuccess"; tax_sent_to_admin : tta; contract_held_now: uint128_zero};
   event e
 end
-
 
 
 (*
