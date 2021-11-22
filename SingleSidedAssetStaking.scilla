@@ -223,7 +223,7 @@ procedure IsNotPaused()
   end
 end
 
-(* @dev: cannot leave user with less than 10 balance after an operation  *)
+(* @dev: cannot leave user with less than 10 balance after an operation. amount cannot be zero  *)
 procedure IsValidAmount(user_amount: Uint128)
   is_greater_than_min = uint128_ge user_amount min_stake_amount;
   match is_greater_than_min with
@@ -234,7 +234,7 @@ procedure IsValidAmount(user_amount: Uint128)
   end
 end
 
-(* @dev: cannot leave user with less than 10 balance after an operation  *)
+(* @dev: cannot leave user with less than 10 balance after an operation, amount can be zero  *)
 procedure IsValidAmountOrZero(user_amount: Uint128)
   is_greater_than_min = uint128_ge user_amount min_stake_amount;
   is_zero = builtin eq user_amount uint128_zero;
