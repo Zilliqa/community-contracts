@@ -9,13 +9,16 @@ let empty_bystr = 0x0000000000000000000000000000000000000000
 let tax_bps_min = Uint128 0 (* 0.00% *)
 let tax_bps_max = Uint128 10000 (* 100.00% *)
 let min_stake_amount = Uint128 10 (* the minimum amount required to be staked / withdrew (cannot be left with less than Uint128 10 token balance) *)
+let min_stake_duration = Uint128 2499 (* 1 day in blocks approx. *)
+let true = True
+let bnum_zero = BNum 0 
 
 type UserSSAS  =  | UserSSAS of BNum    (* block entered staking *)
                                 Uint128 (* deposited tokens *)
 
 type TokenMove = | UserToContract | ContractToUser
-let utc        = UserToContract
-let ctu        = ContractToUser
+let user_to_contract        = UserToContract
+let contract_to_user        = ContractToUser
  
 let one_msg = 
     fun (msg : Message) => 
@@ -184,14 +187,16 @@ contract SingleSidedAssetStaking
   stake_token_contract: ByStr20 with contract end, 
   reward_token_contract: ByStr20 with contract end,
   reward_per_epoch: Uint128,  (* rewarded in total per epoch *)
-  epoch_calculation_period_length_in_blocks: Uint128, (* ~2500bpd * 7d = 17500b as uint - time to rewards *)
+  epoch_calculation_period_length_in_blocks: Uint128, (* 1d = ~2500bpd * 7d = 17500b as uint - time to rewards *)
   init_minimum_lock_time_no_tax_in_blocks: Uint128, (* 3d as uint - time to leave with no tax *)
   init_early_leave_tax_in_bps: Uint128    (* 0.1% = 1bps / 10% = 1000bps / 100% = 10000bps *)
 )
 with
-  let is_valid_min = uint128_ge init_early_leave_tax_in_bps tax_bps_min in
-  let is_valid_max = uint128_lt init_early_leave_tax_in_bps tax_bps_max in 
-  andb is_valid_min is_valid_max 
+  let is_valid_tax_min = uint128_ge init_early_leave_tax_in_bps tax_bps_min in
+  let is_valid_tax_max = uint128_lt init_early_leave_tax_in_bps tax_bps_max in 
+  let is_valid_block_length = uint128_lt min_stake_duration epoch_calculation_period_length_in_blocks in
+  let is_valid_tax = andb is_valid_tax_min is_valid_tax_max in
+  andb is_valid_tax is_valid_block_length
 =>
 
 field paused: Bool = False (* stops deposits/claimrewards but not withdraws *)
@@ -323,26 +328,69 @@ procedure RewardIfEpoch()
   is_time_to_reward = builtin blt calculation_block now;  
   match is_time_to_reward with
     | True => (* now+1 and future blocks *)
-      (* how many epochs have we missed - RewardIfEpoch is triggered when users interact, so if left over multiple epochs, we can assume no state change happened between epochs *)
-      gap_between_epochs_as_uint256 = builtin bsub now calculation_block; (* 100621 - 100400 = 221 assume now>calculation_block*)
-      gap_between_epochs = int256_to_uint128 gap_between_epochs_as_uint256;
-      epochs_to_reward = builtin div gap_between_epochs epoch_calculation_period_length_in_blocks; (* 221 / 99 = 2 *) (* at minimum this will be 1, otherwise above statement runs for false *)
-      future_epoch_over_time = builtin mul epoch_calculation_period_length_in_blocks epochs_to_reward; (* 99 * 2 = 198 *)
-      rewards_generated = builtin mul reward_per_epoch epochs_to_reward; (*DEBUG*)
-      (* set a new future epoch *)
-      new_epoch_block = builtin badd calculation_block future_epoch_over_time; 
-      reward_map <- reward;
-      pool_map <- pool;
-      pool_to_list = builtin to_list pool_map;
-      sum_at_epoch = list_sum_if_eligible pool_to_list epoch_calculation_period_length_in_blocks now; 
-      new_reward_map = get_updated_reward_map_if_eligible pool_to_list sum_at_epoch now epoch_calculation_period_length_in_blocks reward_per_epoch reward_map epochs_to_reward;
-      reward := new_reward_map;
-      next_epoch_block := new_epoch_block; 
-      e = {_eventname : "SnapshotSuccess"; 
-           now:now; processed_epoch:calculation_block; next_epoch: new_epoch_block; rewards_generated:rewards_generated; epochs_to_reward:epochs_to_reward  };
-      event e
+      is_paused <- paused;
+      match is_paused with
+        | True => (* catch StopContractIfExpired.Paused=True noop continue no error when set.*)
+        | False => (* how many epochs have we missed - RewardIfEpoch is triggered when users interact, so if left over multiple epochs, we can assume no state change happened between epochs *)
+          gap_between_epochs_as_uint256 = builtin bsub now calculation_block; (* 100621 - 100400 = 221 assume now>calculation_block*)
+          gap_between_epochs = int256_to_uint128 gap_between_epochs_as_uint256;
+          epochs_to_reward = builtin div gap_between_epochs epoch_calculation_period_length_in_blocks; (* 221 / 99 = 2 *) (* at minimum this will be 1, otherwise above statement runs for false *)
+          future_epoch_over_time = builtin mul epoch_calculation_period_length_in_blocks epochs_to_reward; (* 99 * 2 = 198 *)
+          rewards_generated = builtin mul reward_per_epoch epochs_to_reward; (*DEBUG*)
+          (* set a new future epoch *)
+          new_epoch_block = builtin badd calculation_block future_epoch_over_time; 
+          reward_map <- reward;
+          pool_map <- pool;
+          pool_to_list = builtin to_list pool_map;
+          sum_at_epoch = list_sum_if_eligible pool_to_list epoch_calculation_period_length_in_blocks now; 
+          new_reward_map = get_updated_reward_map_if_eligible pool_to_list sum_at_epoch now epoch_calculation_period_length_in_blocks reward_per_epoch reward_map epochs_to_reward;
+          reward := new_reward_map;
+          next_epoch_block := new_epoch_block; 
+          e = {_eventname : "SnapshotSuccess"; 
+               now:now; processed_epoch:calculation_block; next_epoch: new_epoch_block; rewards_generated:rewards_generated; epochs_to_reward:epochs_to_reward  };
+          event e
+      end
     | False => (* the past, noop *)
   end
+end
+
+
+(* @dev: Triggered when now > epochs_rewards_expire. This will distribute rewards for previous epochs (previously_rewarded_epoch_block - rewards_expire_at) / epoch_length  *)
+(* @dev: Calling order must be Paused(error)>StopContractIfExpired(set spause)>RewardIfEpoch(noop if paused by this procedure, else error earlier on pause)  *)
+procedure StopContractIfExpired()
+  now <-& BLOCKNUMBER;
+  rewards_expire_at <- epochs_rewards_expire;
+  should_pause = builtin blt rewards_expire_at now;
+  match should_pause with
+    | True =>
+        (*  need rewarding *)
+        (* how many epochs have we missed - RewardIfEpoch is triggered when users interact, so if left over multiple epochs, we can assume no state change happened between epochs *)
+        (* we should reward here so we have control over pausing and then noop the next call to RewardIfEpoch *)
+        previously_rewarded_block <- previously_rewarded_epoch_block;
+        gap_between_epochs_as_uint256 = builtin bsub rewards_expire_at previously_rewarded_block; 
+        gap_between_epochs = int256_to_uint128 gap_between_epochs_as_uint256;
+        epochs_to_reward = builtin div gap_between_epochs epoch_calculation_period_length_in_blocks;
+        future_epoch_over_time = builtin mul epoch_calculation_period_length_in_blocks epochs_to_reward; 
+        rewards_generated = builtin mul reward_per_epoch epochs_to_reward; (*DEBUG*)
+        (* set epoch = expiry and set pause = true*)
+        reward_map <- reward;
+        pool_map <- pool;
+        pool_to_list = builtin to_list pool_map;
+        sum_at_epoch = list_sum_if_eligible pool_to_list epoch_calculation_period_length_in_blocks now; 
+        new_reward_map = get_updated_reward_map_if_eligible pool_to_list sum_at_epoch now epoch_calculation_period_length_in_blocks reward_per_epoch reward_map epochs_to_reward;
+        reward := new_reward_map;
+        next_epoch_block := bnum_zero;
+        (* pause contract for future users*)
+        paused := true;
+
+        e = {_eventname : "StopContractIfExpiredSuccess"; 
+             now:now; end_of_contract_life:rewards_expire_at;  rewards_generated:rewards_generated; epochs_to_reward:epochs_to_reward  };
+        event e
+    | False => 
+  end
+
+  
+
 end
 
 (* @dev: Allows a user to deposit an amount of tokens into the contract *)
@@ -352,6 +400,7 @@ end
 (* - `deposit_amount` should have an equal to or less spender allowance otherwise an `CodeInsufficientFunds` error is thrown *)
 transition Deposit(deposit_amount: Uint128)
   IsNotPaused;
+  StopContractIfExpired;
   now <-& BLOCKNUMBER;
   maybe_exists <- pool[_sender];
   amount_locked <- total_amount_locked;
@@ -366,7 +415,7 @@ transition Deposit(deposit_amount: Uint128)
                                  new_deposited_tokens;    (* addition to tokens staked    *)
             
             (* move tokens to contract *)
-            MoveFungibleTokenFromXToY utc stake_token_contract _sender _this_address deposit_amount; (* deposit amount. not recalculated addition*)
+            MoveFungibleTokenFromXToY user_to_contract stake_token_contract _sender _this_address deposit_amount; (* deposit amount. not recalculated addition*)
             
             pool[_sender] := user_ssas;
             new_amount_locked = builtin add amount_locked deposit_amount;
@@ -380,7 +429,7 @@ transition Deposit(deposit_amount: Uint128)
       user_ssas = UserSSAS deposit_lock_duration (* new lock duration     *)
                            deposit_amount;       (* initial deposit amount *)
                            
-      MoveFungibleTokenFromXToY utc stake_token_contract _sender _this_address deposit_amount;
+      MoveFungibleTokenFromXToY contract_to_user stake_token_contract _sender _this_address deposit_amount;
             
       pool[_sender] := user_ssas;
       new_amount_locked = builtin add amount_locked deposit_amount;
@@ -396,12 +445,13 @@ end
 (* - `reward[_sender]` should have a users address present with some reward, otherwise an `CodeInsufficientAllowance` error is thrown *)
 transition ClaimRewards()
   IsNotPaused;
+  StopContractIfExpired;
   RewardIfEpoch;
   now <-& BLOCKNUMBER;
   maybe_reward <- reward[_sender];
   match maybe_reward with
     | Some user_reward =>
-        MoveFungibleTokenFromXToY ctu reward_token_contract _this_address _sender user_reward;
+        MoveFungibleTokenFromXToY contract_to_user reward_token_contract _this_address _sender user_reward;
         delete reward[_sender];
         trl <- total_rewards_left;
         new_trl = builtin sub trl user_reward;
@@ -423,6 +473,7 @@ end
 (* - `tax_amount_as_uint256` has the potential to overflow, if so, a `MathError` error is thrown *)
 (* - `withdraw_amount` should be equal to or larger than Uint128 10 otherwise tax cannot be applied *)
 transition Withdraw(withdraw_amount: Uint128)
+  StopContractIfExpired;
   RewardIfEpoch;
   IsValidAmount withdraw_amount; (* need to withdraw above minimum*)
   maybe_exists <- pool[_sender];
@@ -452,7 +503,7 @@ transition Withdraw(withdraw_amount: Uint128)
                   new_amount_locked = builtin sub amount_locked withdraw_amount;
                   total_amount_locked:= new_amount_locked;
                   (* move tokens to user *)
-                  MoveFungibleTokenFromXToY ctu stake_token_contract _this_address _sender currently_deposited_tokens_after_tax; (* deposit amount. not recalculated addition*)
+                  MoveFungibleTokenFromXToY contract_to_user stake_token_contract _this_address _sender currently_deposited_tokens_after_tax; (* deposit amount. not recalculated addition*)
                   (* remove from pool*)
                   is_zero = builtin eq currently_deposited_tokens withdraw_amount;
                   match is_zero with (* cleanup *)
@@ -471,7 +522,7 @@ transition Withdraw(withdraw_amount: Uint128)
                   new_amount_locked = builtin sub amount_locked withdraw_amount;
                   total_amount_locked:= new_amount_locked;
                   (* move tokens to user *)
-                  MoveFungibleTokenFromXToY ctu stake_token_contract _this_address _sender withdraw_amount; (* deposit amount. not recalculated addition*)
+                  MoveFungibleTokenFromXToY contract_to_user stake_token_contract _this_address _sender withdraw_amount; (* deposit amount. not recalculated addition*)
                   (* remove from pool*)
                   is_zero = builtin eq currently_deposited_tokens withdraw_amount;
                   match is_zero with (* cleanup *)
@@ -498,13 +549,15 @@ end
 (* - `amount` should be a full multiple of the immutable rewards *)
 transition OwnerTopUpRewards(topup_amount: Uint128)
   IsContractOwner;
+  StopContractIfExpired;
+  IsNotPaused; (* in this case block the owner from depositing again if expired.*)
   RewardIfEpoch;
   rewards_left <- total_rewards_left;
   is_equal = builtin eq topup_amount reward_per_epoch;
   match is_equal with
     | True => (* single epoch *)
       (* top up *)
-      MoveFungibleTokenFromXToY utc reward_token_contract _sender _this_address topup_amount;
+      MoveFungibleTokenFromXToY user_to_contract reward_token_contract _sender _this_address topup_amount;
       new_rewards_left = builtin add rewards_left topup_amount;
       total_rewards_left:= new_rewards_left;
       (* set expire block = expire + length *)
@@ -520,7 +573,7 @@ transition OwnerTopUpRewards(topup_amount: Uint128)
       match is_multiple with
         | True => (* is mutiple *)
           (* top up *)
-          MoveFungibleTokenFromXToY utc reward_token_contract _sender _this_address topup_amount;
+          MoveFungibleTokenFromXToY user_to_contract reward_token_contract _sender _this_address topup_amount;
           new_rewards_left = builtin add rewards_left topup_amount;
           total_rewards_left:= new_rewards_left;
           (* set expire block = expire + (x * length) *)
@@ -540,6 +593,7 @@ end
 (* @dev: Owner can change the minimum time that users are impacted by tax, can be zero *)
 transition OwnerChangeTaxLockTime(new_min_tax_time_in_blocks: Uint128)
   IsContractOwner;
+  StopContractIfExpired;
   RewardIfEpoch;
   current_minimum_lock_time_no_tax := new_min_tax_time_in_blocks;
   e = {_eventname : "OwnerChangeTaxLockTimeSuccess"; new_tax_time: new_min_tax_time_in_blocks};
@@ -549,6 +603,7 @@ end
 (* @dev: Allows owner to change the rate in which users are impacted by tax in bps, can be zero, can't be more than 10000 *)
 transition OwnerChangeTaxRate(new_tax_rate_in_bps: Uint128) 
   IsContractOwner;
+  StopContractIfExpired;
   RewardIfEpoch;
   is_valid_min = uint128_ge new_tax_rate_in_bps tax_bps_min;
   is_valid_max = uint128_lt new_tax_rate_in_bps tax_bps_max; 
@@ -567,10 +622,11 @@ end
 (* @dev: Allows owner to reclaim total_taxed_amount from contract *)
 transition OwnerClaimTax()
   IsContractOwner;
+  StopContractIfExpired;
   RewardIfEpoch;
   tta <- total_taxed_amount;
   (* move tax to owner amd update  *)
-  MoveFungibleTokenFromXToY ctu stake_token_contract _this_address _sender tta; 
+  MoveFungibleTokenFromXToY contract_to_user stake_token_contract _this_address _sender tta; 
   total_taxed_amount := uint128_zero;
   e = {_eventname : "OwnerClaimTaxSuccess"; tax_sent_to_owner : tta; contract_held_now: uint128_zero};
   event e
@@ -579,13 +635,14 @@ end
 (* @dev: Contract must be paused if current_contract_owner wants to reclaim rewards, so that users can't continue to stake for no reward *)
 transition OwnerReclaimRewards()
   IsContractOwner;
+  StopContractIfExpired;
   RewardIfEpoch;
   is_paused <- paused;
   match is_paused with
     | True =>
       trl <- total_rewards_left;
       (* move rewards to owner amd update  *)
-      MoveFungibleTokenFromXToY ctu reward_token_contract _this_address _sender trl; 
+      MoveFungibleTokenFromXToY contract_to_user reward_token_contract _this_address _sender trl; 
       total_rewards_left := uint128_zero;
       e = {_eventname : "OwnerReclaimRewardsSuccess"; rewards_taken:trl; contract_held_now: uint128_zero};
       event e
@@ -598,6 +655,7 @@ end
 transition OwnerTogglePause(pause_state: Bool)
   IsContractOwner;
   RewardIfEpoch;
+  StopContractIfExpired;
   paused := pause_state;
   e = {_eventname : "OwnerTogglePauseSuccess"; new_pause_state: pause_state};
   event e
