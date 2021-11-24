@@ -38,6 +38,17 @@ let uint128_to_uint256 : Uint128 -> Uint256 =
         builtin div zero zero
       | Some x256 => x256
       end
+      
+ (* @dev: When passing a Int256 value, returns a Uint128 of that value *)      
+let int256_to_uint128 : Int256 -> Uint128 =
+  fun (x : Int256) =>
+    let ox128 = builtin to_uint128 x in
+      match ox128 with
+      | None => (* this never happens, hence we throw a division by zero exception just in case *)
+        let zero = Uint128 0 in
+        builtin div zero zero
+      | Some x128 => x128
+      end
          
 (* @dev: Compute "(x * y) / z" with protection against integer overflows *)
 let muldiv : Uint128 -> Uint128 -> Uint128 -> Uint128 =
@@ -85,13 +96,15 @@ let list_sum_if_eligible =
     foldl iter init l
 
 (* @dev: Foreaching each person in pool, if they are eligible, then calculate their percentage of the epoch total rewards. Returns a reward Map ByStr20 Uint128 *)
+(* @dev: When calculating multiple epochs, it is assumed everyone in the map is valid since list_sum_if_eligible will return true as long as epoch_length *)
 let get_updated_reward_map_if_eligible =
   fun (l : List (Pair ByStr20 UserSSAS)) => (* pool.toList *)
   fun (sum_at_epoch : Uint128) => (* the total of the pool calculated once *)
   fun (now : BNum) => (* now in btime*)
   fun (epoch_length : Uint128) => (* the current epoch length *)
   fun (reward_per_epoch : Uint128) => (* reward to distribute if valid on an epoch*)
-  fun (reward_map : Map ByStr20 Uint128) => (*reward.toList*)
+  fun (reward_map : Map ByStr20 Uint128) => (* reward.toList *)
+  fun (epochs_to_reward: Uint128) => (* amount of epochs to reward for: will be minimum 1, assumes no user has claimed for N+1 or longer epochs, so reward users for time (what if this is left for too long, and no one claims, then one person could claim everything if they staked over time) *)
     let foldl = @list_foldl 
       (Pair ByStr20 UserSSAS) (* what we are foreaching*)
       (Map ByStr20 Uint128) in (* accumulator what's returned each time *)
@@ -113,20 +126,22 @@ let get_updated_reward_map_if_eligible =
                             | Some previous_reward => (* previously have an entry*)
                                 match maybe_user_share_of_rewards_at_this_epoch with
                                   | Some user_share_of_rewards_at_this_epoch =>
-                                    let new_total = builtin add previous_reward user_share_of_rewards_at_this_epoch in
-                                    builtin put acc user_address new_total 
+                                    let new_total_over_time = builtin mul user_share_of_rewards_at_this_epoch epochs_to_reward in
+                                    let new_total_plus_existing = builtin add previous_reward new_total_over_time in
+                                    builtin put acc user_address new_total_plus_existing 
                                   | None => (* shouldn't get here noop *)
                                     acc
                                 end
                             | None => (* first epoch eligible, create map entry*)
                                 match maybe_user_share_of_rewards_at_this_epoch with
                                   | Some user_share_of_rewards_at_this_epoch =>
-                                     builtin put acc user_address user_share_of_rewards_at_this_epoch 
+                                     let new_total_over_time = builtin mul user_share_of_rewards_at_this_epoch epochs_to_reward in
+                                     builtin put acc user_address new_total_over_time 
                                   | None => (* shouldn't get here noop *)
                                     acc
                                 end
                           end
-              | True => (* arent eligible noop *)
+              | True => (* arent eligible noop *) (* if multiple epochs then everyone is eligible*N since an unstake/restake/withdraw would cause the contract to reward *)
                 acc
               end
           end
@@ -163,14 +178,13 @@ let make_error =
     in
     { _exception : "Error"; code : result_code; res : result}
     
-
 contract SingleSidedAssetStaking
 (
   init_contract_owner: ByStr20,
   stake_token_contract: ByStr20 with contract end, 
   reward_token_contract: ByStr20 with contract end,
   reward_per_epoch: Uint128,  (* rewarded in total per epoch *)
-  init_epoch_calculation_period_length: Uint128, (* ~2500bpd * 7d = 17500b as uint - time to rewards *)
+  epoch_calculation_period_length: Uint128, (* ~2500bpd * 7d = 17500b as uint - time to rewards *)
   init_minimum_lock_time_no_tax: Uint128, (* 3d as uint - time to leave with no tax *)
   init_early_leave_tax: Uint128    (* 0.1% = 1bps / 10% = 1000bps / 100% = 10000bps *)
 )
@@ -189,8 +203,9 @@ field total_amount_locked: Uint128 = uint128_zero (* total amount locked by user
 field total_rewards_left: Uint128 = uint128_zero (* total amount of rewards deposited able to be claimed in the future, can be topped-up *)
 field current_early_leave_tax: Uint128 = init_early_leave_tax (* mutable tax rate on leaving pool before an epoch duration *)
 field current_minimum_lock_time_no_tax: Uint128 = init_minimum_lock_time_no_tax (* mutable minimum time to leave pool without being taxed*)
-field current_epoch_length: Uint128 = init_epoch_calculation_period_length (* length of an epoch in blocks represented as Uint128 *)
-field next_epoch_block: BNum = builtin badd _creation_block init_epoch_calculation_period_length (* when should first epoch time be = time_at_deployment+epoch_length*)
+
+field next_epoch_block: BNum = builtin badd _creation_block epoch_calculation_period_length (* first epoch time be = time_at_deployment+epoch_length*)
+field previously_rewarded_epoch_block: BNum = _creation_block
 field epochs_rewards_expire: BNum = _creation_block
 
 field pool: Map ByStr20 UserSSAS = Emp ByStr20 UserSSAS (* user_address -> (enter_stake_block, deposited_tokens *) (* stores users deposits*)
@@ -298,28 +313,34 @@ procedure MoveFungibleTokenFromXToY(token_move: TokenMove, fungible_contract:ByS
     end
 end
 
+
 (* @dev: Triggered when now >= next_epoch_block. If eligible, dynamically calculates and sets users rewards for an epoch into 'reward'  *)
 (* @Requirements: *)
 (* To be eligible for rewards when this is ran. Users have to be deposted for (enter_stake_block + epoch_length) *)
+(* If triggered when (now > next_epoch_block * 2) or greater, will mutitrigger accumulative rewards *)
 procedure RewardIfEpoch()
   now <-& BLOCKNUMBER;
-  epoch_block <- next_epoch_block;
-  epoch_length <- current_epoch_length;
-  is_time_to_reward = builtin blt epoch_block now;  
+  calculation_block <- next_epoch_block;
+  is_time_to_reward = builtin blt calculation_block now;  
   match is_time_to_reward with
     | True => (* now+1 and future blocks *)
-      (* caters for the case where epochs lag behind carries right upto now, so epochs can be longer than epl but the next tx catches it up *)
-      (* this will also completely skip epochs if missed, so really a high block count for the epoch is needed to counteract this. *)
-      new_epoch_block = builtin badd now epoch_length; 
+      (* how many epochs have we missed - RewardIfEpoch is triggered when users interact, so if left over multiple epochs, we can assume no state change happened between epochs *)
+      gap_between_epochs_as_uint256 = builtin bsub now calculation_block; (* 100621 - 100400 = 221 assume now>calculation_block*)
+      gap_between_epochs = int256_to_uint128 gap_between_epochs_as_uint256;
+      epochs_to_reward = builtin div gap_between_epochs epoch_calculation_period_length; (* 221 / 99 = 2 *) (* at minimum this will be 1, otherwise above statement runs for false *)
+      future_epoch_over_time = builtin mul epoch_calculation_period_length epochs_to_reward; (* 99 * 2 = 198 *)
+      rewards_generated = builtin mul reward_per_epoch epochs_to_reward; (*DEBUG*)
+      (* set a new future epoch *)
+      new_epoch_block = builtin badd now future_epoch_over_time; 
       reward_map <- reward;
       pool_map <- pool;
       pool_to_list = builtin to_list pool_map;
-      sum_at_epoch = list_sum_if_eligible pool_to_list epoch_length now; 
-      new_reward_map = get_updated_reward_map_if_eligible pool_to_list sum_at_epoch now epoch_length reward_per_epoch reward_map;
+      sum_at_epoch = list_sum_if_eligible pool_to_list epoch_calculation_period_length now; 
+      new_reward_map = get_updated_reward_map_if_eligible pool_to_list sum_at_epoch now epoch_calculation_period_length reward_per_epoch reward_map epochs_to_reward;
       reward := new_reward_map;
       next_epoch_block := new_epoch_block; 
       e = {_eventname : "SnapshotSuccess"; 
-           now:now; processed_epoch:epoch_block; next_epoch: new_epoch_block };
+           now:now; processed_epoch:calculation_block; next_epoch: new_epoch_block; rewards_generated:rewards_generated };
       event e
     | False => (* the past, noop *)
   end
@@ -334,9 +355,8 @@ transition Deposit(deposit_amount: Uint128)
   IsNotPaused;
   now <-& BLOCKNUMBER;
   maybe_exists <- pool[_sender];
-  epoch_length <- current_epoch_length;
   amount_locked <- total_amount_locked;
-  deposit_lock_duration = builtin badd now epoch_length;
+  deposit_lock_duration = builtin badd now epoch_calculation_period_length;
   match maybe_exists with
     | Some some_user_ssas => (* user already exists, increase amount of tokens *)
       match some_user_ssas with
@@ -489,26 +509,24 @@ transition OwnerTopUpRewards(topup_amount: Uint128)
       new_rewards_left = builtin add rewards_left topup_amount;
       total_rewards_left:= new_rewards_left;
       (* set expire block = expire + length *)
-      epoch_length <- current_epoch_length;
       rewards_expire <- epochs_rewards_expire;
-      new_rewards_expire = builtin badd rewards_expire epoch_length;
+      new_rewards_expire = builtin badd rewards_expire epoch_calculation_period_length;
       epochs_rewards_expire:= new_rewards_expire;
       e = {_eventname : "OwnerSingleRewardTopUpSuccess"; amount_topped_up: topup_amount; contract_held: new_rewards_left; deposit_more_funds_at: new_rewards_expire};
       event e
     | False =>
       x = builtin div topup_amount reward_per_epoch;
       y = builtin div topup_amount x;
-      is_mutiple = builtin eq y reward_per_epoch;
-      match is_mutiple with
+      is_multiple = builtin eq y reward_per_epoch;
+      match is_multiple with
         | True =>
           (* top up *)
           MoveFungibleTokenFromXToY utc reward_token_contract _sender _this_address topup_amount;
           new_rewards_left = builtin add rewards_left topup_amount;
           total_rewards_left:= new_rewards_left;
           (* set expire block = expire + (x * length) *)
-          epoch_length <- current_epoch_length;
           rewards_expire <- epochs_rewards_expire;
-          blocks_to_reward = builtin mul x epoch_length;
+          blocks_to_reward = builtin mul x epoch_calculation_period_length;
           new_rewards_expire = builtin badd rewards_expire blocks_to_reward;
           epochs_rewards_expire:= new_rewards_expire;
           e = {_eventname : "OwnerMutiRewardTopUpSuccess"; amount_topped_up: topup_amount; contract_held: new_rewards_left; blocks_to_reward: blocks_to_reward; x: x};
@@ -518,23 +536,6 @@ transition OwnerTopUpRewards(topup_amount: Uint128)
           ThrowError err
       end
   end
-end
-
-(* @dev: Owner can change the time that a reward calculation is performed, can be zero  *)
-(* @dev: Implications of a short epoch time are that users are eligible for rewards and therefore more calculations and gas is required  *)
-(* @dev: This could expend contract funds quickly if a large reward is set. *)
-(* @dev: Implications of a long epoch time are that when a similar  *)
-(* @Requirements: *)
-(* - `pool[_sender]` should have a users address present otherwise an `SenderHasNoFundsAtContract` error is thrown *)
-(* - `tax_amount_as_uint256` has the potential to overflow, if so, a `MathError` error is thrown *)
-(* - `withdraw_amount` should be equal to or larger than Uint128 10 otherwise tax cannot be applied *)
-(* - `` Amount should if it's a full multiple of the immutable rewards, otherwise an `???` error is thrown *)
-transition OwnerChangeEpochLength(new_epoch_length: Uint128)
-  IsContractOwner;
-  RewardIfEpoch;
-  current_epoch_length := new_epoch_length;
-  e = {_eventname : "OwnerChangeEpochLengthSuccess"; new_epoch_length: new_epoch_length};
-  event e
 end
 
 (* @dev: Owner can change the minimum time that users are impacted by tax, can be zero *)
