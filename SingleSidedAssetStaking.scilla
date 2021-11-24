@@ -141,7 +141,7 @@ let get_updated_reward_map_if_eligible =
                                     acc
                                 end
                           end
-              | True => (* arent eligible noop *) (* if multiple epochs then everyone is eligible*N since an unstake/restake/withdraw would cause the contract to reward *)
+              | True => (* arent eligible noop *) (* if multiple epochs then everyone is eligible to (rewards*N) since an unstake/restake/withdraw would cause the contract to reward *)
                 acc
               end
           end
@@ -379,7 +379,7 @@ transition Deposit(deposit_amount: Uint128)
       IsValidAmount deposit_amount; (* need to deposit above minimum*)
       
       user_ssas = UserSSAS deposit_lock_duration (* new lock duration     *)
-                           deposit_amount;       (* inital deposit amount *)
+                           deposit_amount;       (* initial deposit amount *)
                            
       MoveFungibleTokenFromXToY utc stake_token_contract _sender _this_address deposit_amount;
             
@@ -496,14 +496,14 @@ end
 
 (* @dev: Owner can topup the amount of rewards and extend the contract life.  *)
 (* @Requirements: *)
-(* - `amount` should be a full multiple of the immutable rewards, otherwise an `???` error is thrown *)
+(* - `amount` should be a full multiple of the immutable rewards *)
 transition OwnerTopUpRewards(topup_amount: Uint128)
   IsContractOwner;
   RewardIfEpoch;
   rewards_left <- total_rewards_left;
   is_equal = builtin eq topup_amount reward_per_epoch;
   match is_equal with
-    | True =>
+    | True => (* single epoch *)
       (* top up *)
       MoveFungibleTokenFromXToY utc reward_token_contract _sender _this_address topup_amount;
       new_rewards_left = builtin add rewards_left topup_amount;
@@ -514,12 +514,12 @@ transition OwnerTopUpRewards(topup_amount: Uint128)
       epochs_rewards_expire:= new_rewards_expire;
       e = {_eventname : "OwnerSingleRewardTopUpSuccess"; amount_topped_up: topup_amount; contract_held: new_rewards_left; deposit_more_funds_at: new_rewards_expire};
       event e
-    | False =>
+    | False => (* is mutiple? *)
       x = builtin div topup_amount reward_per_epoch;
       y = builtin div topup_amount x;
       is_multiple = builtin eq y reward_per_epoch;
       match is_multiple with
-        | True =>
+        | True => (* is mutiple *)
           (* top up *)
           MoveFungibleTokenFromXToY utc reward_token_contract _sender _this_address topup_amount;
           new_rewards_left = builtin add rewards_left topup_amount;
@@ -547,7 +547,7 @@ transition OwnerChangeTaxLockTime(new_min_tax_time_in_blocks: Uint128)
   event e
 end
 
-(* @dev: Allows owner can change the rate in which users are impacted by tax, can be zero, can't be more than 10000 *)
+(* @dev: Allows owner to change the rate in which users are impacted by tax in bps, can be zero, can't be more than 10000 *)
 transition OwnerChangeTaxRate(new_tax_rate_in_bps: Uint128) 
   IsContractOwner;
   RewardIfEpoch;
@@ -565,7 +565,7 @@ transition OwnerChangeTaxRate(new_tax_rate_in_bps: Uint128)
   end
 end
 
-(* @dev: Allows owner to reclaim total_taxed_amount *)
+(* @dev: Allows owner to reclaim total_taxed_amount from contract *)
 transition OwnerClaimTax()
   IsContractOwner;
   RewardIfEpoch;
@@ -577,7 +577,7 @@ transition OwnerClaimTax()
   event e
 end
 
-(* @dev: Contract must be paused if current_contract_owner wants to claim rewards (rewards = reward_token_contract) so that users can't continue to stake for no reward *)
+(* @dev: Contract must be paused if current_contract_owner wants to reclaim rewards, so that users can't continue to stake for no reward *)
 transition OwnerReclaimRewards()
   IsContractOwner;
   RewardIfEpoch;
@@ -594,8 +594,8 @@ transition OwnerReclaimRewards()
   end
 end
 
-(* @dev: Allows current_contract_owner to toggle pause all interactions expect withdraws of inital (pauses withdraw of rewards) *)
-(* @dev: Implications of a paused contracts include users not being able to deposit funds, or withdraw rewards, but can still withdraw their inital claim *)
+(* @dev: Allows current_contract_owner to toggle pause all interactions except withdrawals of the initial claim. *)
+(* @dev: Implications of a paused contracts include users not being able to deposit funds, or withdraw rewards, but can still withdraw their inital claim. *)
 transition OwnerTogglePause(pause_state: Bool)
   IsContractOwner;
   RewardIfEpoch;
@@ -608,9 +608,9 @@ end
 transition RequestOwnershipTransfer(new_owner : ByStr20)
   IsContractOwner;
   RewardIfEpoch;
-  new_empty_staging = Some {ByStr20} new_owner;
-  staged_contract_owner := new_empty_staging;
-  e = {_eventname : "RequestOwnershipTransferSuccess"; staged_contract_owner: new_empty_staging};
+  new_staging = Some {ByStr20} new_owner;
+  staged_contract_owner := new_staging;
+  e = {_eventname : "RequestOwnershipTransferSuccess"; staged_contract_owner: new_staging};
   event e
 end
 
