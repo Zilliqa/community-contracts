@@ -184,13 +184,13 @@ contract SingleSidedAssetStaking
   stake_token_contract: ByStr20 with contract end, 
   reward_token_contract: ByStr20 with contract end,
   reward_per_epoch: Uint128,  (* rewarded in total per epoch *)
-  epoch_calculation_period_length: Uint128, (* ~2500bpd * 7d = 17500b as uint - time to rewards *)
-  init_minimum_lock_time_no_tax: Uint128, (* 3d as uint - time to leave with no tax *)
-  init_early_leave_tax: Uint128    (* 0.1% = 1bps / 10% = 1000bps / 100% = 10000bps *)
+  epoch_calculation_period_length_in_blocks: Uint128, (* ~2500bpd * 7d = 17500b as uint - time to rewards *)
+  init_minimum_lock_time_no_tax_in_blocks: Uint128, (* 3d as uint - time to leave with no tax *)
+  init_early_leave_tax_in_bps: Uint128    (* 0.1% = 1bps / 10% = 1000bps / 100% = 10000bps *)
 )
 with
-  let is_valid_min = uint128_ge init_early_leave_tax tax_bps_min in
-  let is_valid_max = uint128_lt init_early_leave_tax tax_bps_max in 
+  let is_valid_min = uint128_ge init_early_leave_tax_in_bps tax_bps_min in
+  let is_valid_max = uint128_lt init_early_leave_tax_in_bps tax_bps_max in 
   andb is_valid_min is_valid_max 
 =>
 
@@ -201,10 +201,10 @@ field staged_contract_owner: Option ByStr20 = None {ByStr20} (* owner can surren
 field total_taxed_amount: Uint128 = uint128_zero  (* totals the amount taxed, allows current_owner to withdraw *)
 field total_amount_locked: Uint128 = uint128_zero (* total amount locked by users *)
 field total_rewards_left: Uint128 = uint128_zero (* total amount of rewards deposited able to be claimed in the future, can be topped-up *)
-field current_early_leave_tax: Uint128 = init_early_leave_tax (* mutable tax rate on leaving pool before an epoch duration *)
-field current_minimum_lock_time_no_tax: Uint128 = init_minimum_lock_time_no_tax (* mutable minimum time to leave pool without being taxed*)
+field current_early_leave_tax: Uint128 = init_early_leave_tax_in_bps (* mutable tax rate on leaving pool before an epoch duration *)
+field current_minimum_lock_time_no_tax: Uint128 = init_minimum_lock_time_no_tax_in_blocks (* mutable minimum time to leave pool without being taxed*)
 
-field next_epoch_block: BNum = builtin badd _creation_block epoch_calculation_period_length (* first epoch time be = time_at_deployment+epoch_length*)
+field next_epoch_block: BNum = builtin badd _creation_block epoch_calculation_period_length_in_blocks (* first epoch time be = time_at_deployment+epoch_length*)
 field previously_rewarded_epoch_block: BNum = _creation_block
 field epochs_rewards_expire: BNum = _creation_block
 
@@ -313,7 +313,6 @@ procedure MoveFungibleTokenFromXToY(token_move: TokenMove, fungible_contract:ByS
     end
 end
 
-
 (* @dev: Triggered when now >= next_epoch_block. If eligible, dynamically calculates and sets users rewards for an epoch into 'reward'  *)
 (* @Requirements: *)
 (* To be eligible for rewards when this is ran. Users have to be deposted for (enter_stake_block + epoch_length) *)
@@ -327,20 +326,20 @@ procedure RewardIfEpoch()
       (* how many epochs have we missed - RewardIfEpoch is triggered when users interact, so if left over multiple epochs, we can assume no state change happened between epochs *)
       gap_between_epochs_as_uint256 = builtin bsub now calculation_block; (* 100621 - 100400 = 221 assume now>calculation_block*)
       gap_between_epochs = int256_to_uint128 gap_between_epochs_as_uint256;
-      epochs_to_reward = builtin div gap_between_epochs epoch_calculation_period_length; (* 221 / 99 = 2 *) (* at minimum this will be 1, otherwise above statement runs for false *)
-      future_epoch_over_time = builtin mul epoch_calculation_period_length epochs_to_reward; (* 99 * 2 = 198 *)
+      epochs_to_reward = builtin div gap_between_epochs epoch_calculation_period_length_in_blocks; (* 221 / 99 = 2 *) (* at minimum this will be 1, otherwise above statement runs for false *)
+      future_epoch_over_time = builtin mul epoch_calculation_period_length_in_blocks epochs_to_reward; (* 99 * 2 = 198 *)
       rewards_generated = builtin mul reward_per_epoch epochs_to_reward; (*DEBUG*)
       (* set a new future epoch *)
-      new_epoch_block = builtin badd now future_epoch_over_time; 
+      new_epoch_block = builtin badd calculation_block future_epoch_over_time; 
       reward_map <- reward;
       pool_map <- pool;
       pool_to_list = builtin to_list pool_map;
-      sum_at_epoch = list_sum_if_eligible pool_to_list epoch_calculation_period_length now; 
-      new_reward_map = get_updated_reward_map_if_eligible pool_to_list sum_at_epoch now epoch_calculation_period_length reward_per_epoch reward_map epochs_to_reward;
+      sum_at_epoch = list_sum_if_eligible pool_to_list epoch_calculation_period_length_in_blocks now; 
+      new_reward_map = get_updated_reward_map_if_eligible pool_to_list sum_at_epoch now epoch_calculation_period_length_in_blocks reward_per_epoch reward_map epochs_to_reward;
       reward := new_reward_map;
       next_epoch_block := new_epoch_block; 
       e = {_eventname : "SnapshotSuccess"; 
-           now:now; processed_epoch:calculation_block; next_epoch: new_epoch_block; rewards_generated:rewards_generated };
+           now:now; processed_epoch:calculation_block; next_epoch: new_epoch_block; rewards_generated:rewards_generated; epochs_to_reward:epochs_to_reward  };
       event e
     | False => (* the past, noop *)
   end
@@ -356,7 +355,7 @@ transition Deposit(deposit_amount: Uint128)
   now <-& BLOCKNUMBER;
   maybe_exists <- pool[_sender];
   amount_locked <- total_amount_locked;
-  deposit_lock_duration = builtin badd now epoch_calculation_period_length;
+  deposit_lock_duration = builtin badd now epoch_calculation_period_length_in_blocks;
   match maybe_exists with
     | Some some_user_ssas => (* user already exists, increase amount of tokens *)
       match some_user_ssas with
@@ -510,7 +509,7 @@ transition OwnerTopUpRewards(topup_amount: Uint128)
       total_rewards_left:= new_rewards_left;
       (* set expire block = expire + length *)
       rewards_expire <- epochs_rewards_expire;
-      new_rewards_expire = builtin badd rewards_expire epoch_calculation_period_length;
+      new_rewards_expire = builtin badd rewards_expire epoch_calculation_period_length_in_blocks;
       epochs_rewards_expire:= new_rewards_expire;
       e = {_eventname : "OwnerSingleRewardTopUpSuccess"; amount_topped_up: topup_amount; contract_held: new_rewards_left; deposit_more_funds_at: new_rewards_expire};
       event e
@@ -526,7 +525,7 @@ transition OwnerTopUpRewards(topup_amount: Uint128)
           total_rewards_left:= new_rewards_left;
           (* set expire block = expire + (x * length) *)
           rewards_expire <- epochs_rewards_expire;
-          blocks_to_reward = builtin mul x epoch_calculation_period_length;
+          blocks_to_reward = builtin mul x epoch_calculation_period_length_in_blocks;
           new_rewards_expire = builtin badd rewards_expire blocks_to_reward;
           epochs_rewards_expire:= new_rewards_expire;
           e = {_eventname : "OwnerMutiRewardTopUpSuccess"; amount_topped_up: topup_amount; contract_held: new_rewards_left; blocks_to_reward: blocks_to_reward; x: x};
