@@ -96,7 +96,7 @@ let list_sum_if_eligible =
     foldl iter init l
 
 (* @dev: Foreaching each person in pool, if they are eligible, then calculate their percentage of the epoch total rewards. Returns a reward Map ByStr20 Uint128 *)
-(* @dev: When calculating multiple epochs, it is assumed everyone in the map is valid since list_sum_if_eligible will return true as long as epoch_length *)
+(* @dev: When calculating multiple epochs, it is assumed everyone in the map is valid since list_sum_if_eligible will return true as long as epochs_to_reward>=1 *)
 let get_updated_reward_map_if_eligible =
   fun (l : List (Pair ByStr20 UserSSAS)) => (* pool.toList *)
   fun (sum_at_epoch : Uint128) => (* the total of the pool calculated once *)
