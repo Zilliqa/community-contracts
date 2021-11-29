@@ -160,6 +160,7 @@ type Error =
   | ContractIsPaused
   | OutOfBoundsTaxBpsValue
   | NotBelowMinimumStake
+  | ContractShouldBeEmergencyPaused 
 
 let make_error =
   fun (result : Error) =>
@@ -175,6 +176,7 @@ let make_error =
       | ContractIsPaused                              => Int32 -8
       | OutOfBoundsTaxBpsValue                        => Int32 -9
       | NotBelowMinimumStake                          => Int32 -10
+      | ContractShouldBeEmergencyPaused               => Int32 -11
       end
     in
     { _exception : "Error"; code : result_code; res : result}
@@ -195,7 +197,9 @@ with
   andb is_valid_min is_valid_max 
 =>
 
-field paused: Bool = False (* stops deposits/claimrewards but not withdraws *)
+field emergency_pause: Bool = False (* stops deposits/claimrewards/withdraws across the whole contract (everything) *)
+field soft_pause: Bool = False      (* allows claiming of rewards and stake, but not depositing more stake or more rewards - flipped true when expired<now*)
+
 field current_contract_owner: ByStr20  = init_contract_owner (* owner of owner functions *)
 field staged_contract_owner: Option ByStr20 = None {ByStr20} (* owner can surrender ownership to an address. 2 step: stage, confirm to set a new current_owner*)
 
@@ -228,9 +232,20 @@ procedure IsContractOwner()
     end
 end
 
-(* @dev: Throws an error if the contract is paused *)
-procedure IsNotPaused()
-  is_paused <- paused;
+(* @dev: Throws an error if emergency_pause is true *)
+procedure IsNotEmergencyPaused()
+  is_paused <- emergency_pause;
+  match is_paused with
+    | True => 
+      err = ContractIsPaused;
+      ThrowError err
+    | False =>
+  end
+end
+
+(* @dev: Throws an error if soft_pause is true *)
+procedure IsNotSoftPaused()
+  is_paused <- soft_pause;
   match is_paused with
     | True => 
       err = ContractIsPaused;
@@ -390,11 +405,13 @@ end
 
 (* @dev: Allows a user to deposit an amount of tokens into the contract *)
 (* @dev: On increasing an already existing deposit, a new tax_threshold block is generated and you restart your tax-free duration starting from this_block *)
+(* @dev: If softpaused error // if emergencypaused error *)
 (* @Requirements: *)
 (* - `fungible_contract` should have an allowance with this contract address otherwise an `CodeInsufficientAllowance` error is thrown *)
 (* - `deposit_amount` should have an equal to or less spender allowance otherwise an `CodeInsufficientFunds` error is thrown *)
 transition Deposit(deposit_amount: Uint128)
-  IsNotPaused;
+  IsNotEmergencyPaused;
+  IsNotSoftPaused;
   now <-& BLOCKNUMBER;
   maybe_exists <- pool[_sender];
   amount_locked <- total_amount_locked;
@@ -438,7 +455,7 @@ end
 (* @Requirements: *)
 (* - `reward[_sender]` should have a users address present with some reward, otherwise an `CodeInsufficientAllowance` error is thrown *)
 transition ClaimRewards()
-  IsNotPaused;
+  IsNotEmergencyPaused;
   RewardIfEpoch;
   now <-& BLOCKNUMBER;
   maybe_reward <- reward[_sender];
@@ -460,7 +477,8 @@ end
 
 (* @dev: Allows a user to leave the ssas pool, returning their original stake to them *)
 (* @dev: If UserSSAS.block_entered_staking + tax_free_threshold <= BLOCKNUMBER then no tax, else tax current_early_leave_tax% of total_deposit_amount and increment total_taxed_amount *)
-(* @dev: Allows withdrawls if paused *)
+(* @dev: Allows withdrawl of inital if soft paused *)
+(* @dev: Errors if emergency paused *)
 (* @Requirements: *)
 (* - `pool[_sender]` should have a users address present otherwise an `SenderHasNoFundsAtContract` error is thrown *)
 (* - `tax_amount_as_uint256` has the potential to overflow, if so, a `MathError` error is thrown *)
@@ -537,10 +555,14 @@ transition Withdraw(withdraw_amount: Uint128)
 end
 
 (* @dev: Owner can topup the amount of rewards and extend the contract life.  *)
+(* @dev: Errors if soft paused *)
+(* @dev: Errors if emergency paused *)
 (* @Requirements: *)
 (* - `amount` should be a full multiple of the immutable rewards *)
 transition OwnerTopUpRewards(topup_amount: Uint128)
   IsContractOwner;
+  IsNotEmergencyPaused;
+  IsNotSoftPaused;
   RewardIfEpoch;
   rewards_left <- total_rewards_left;
   is_equal = builtin eq topup_amount reward_per_epoch;
@@ -590,7 +612,6 @@ transition OwnerChangeTaxLockTime(new_min_tax_time_in_blocks: Uint128)
 end
 
 (* @dev: Allows owner to change the rate in which users are impacted by tax in bps, can be zero, can't be more than 10000 *)
-
 transition OwnerChangeTaxRate(new_tax_rate_in_bps: Uint128) 
   IsContractOwner;
   RewardIfEpoch;
@@ -620,11 +641,14 @@ transition OwnerClaimTax()
   event e
 end
 
-(* @dev: Contract must be paused if current_contract_owner wants to reclaim rewards, so that users can't continue to stake for no reward *)
+(* @dev: Contract must be emergency_paused if current_contract_owner wants to reclaim rewards, so that users can't continue to stake for no reward *)
+(* @dev: Errors if soft paused *)
+(* @dev: Allows withdraws if emergency paused to cater for migration *)
 transition OwnerReclaimRewards()
   IsContractOwner;
+  IsNotSoftPaused;
   RewardIfEpoch;
-  is_paused <- paused;
+  is_paused <- emergency_pause;
   match is_paused with
     | True =>
       trl <- total_rewards_left;
@@ -634,16 +658,28 @@ transition OwnerReclaimRewards()
       e = {_eventname : "OwnerReclaimRewardsSuccess"; rewards_taken:trl; contract_held_now: uint128_zero};
       event e
     | False =>
+      err = ContractShouldBeEmergencyPaused;
+      ThrowError err
   end
 end
 
 (* @dev: Allows current_contract_owner to toggle pause all interactions except withdrawals of the initial claim. *)
-(* @dev: Implications of a paused contracts include users not being able to deposit funds, or withdraw rewards, but can still withdraw their inital claim. *)
-transition OwnerTogglePause(pause_state: Bool)
+(* @dev: Implications of an emergency paused contract include all withdraw/deposits transition stop accepting funds *)
+transition OwnerToggleEmergencyPause(pause_state: Bool)
   IsContractOwner;
   RewardIfEpoch;
-  paused := pause_state;
-  e = {_eventname : "OwnerTogglePauseSuccess"; new_pause_state: pause_state};
+  emergency_pause := pause_state;
+  e = {_eventname : "OwnerToggleEmergencyPauseSuccess"; new_pause_state: pause_state};
+  event e
+end
+
+(* @dev: Allows current_contract_owner to toggle pause all interactions except withdrawals of the initial claim. *)
+(* @dev: Implications of an soft paused contract includes stopping accepting new deposits or new rewards, but allows  *)
+transition OwnerToggleSoftPause(pause_state: Bool)
+  IsContractOwner;
+  RewardIfEpoch;
+  soft_pause := pause_state;
+  e = {_eventname : "OwnerToggleSoftPauseSuccess"; new_pause_state: pause_state};
   event e
 end
 
