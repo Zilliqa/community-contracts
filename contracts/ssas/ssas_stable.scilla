@@ -3,7 +3,7 @@ scilla_version 0
 import IntUtils BoolUtils ListUtils PairUtils
 
 library SingleSidedAssetStaking
-
+let bool_true = True
 let uint128_zero = Uint128 0
 let uint128_one = Uint128 1
 let empty_bystr = 0x0000000000000000000000000000000000000000
@@ -212,6 +212,8 @@ field current_minimum_lock_time_no_tax: Uint128 = init_minimum_lock_time_no_tax 
 field next_epoch_block: BNum = builtin badd _creation_block epoch_calculation_period_length (* first epoch time be = time_at_deployment+epoch_length*)
 field previously_rewarded_epoch_block: BNum = _creation_block
 field epochs_rewards_expire: BNum = _creation_block
+field amount_of_epochs_to_reward: Uint128 = uint128_zero 
+
 
 field pool: Map ByStr20 UserSSAS = Emp ByStr20 UserSSAS (* user_address -> (enter_stake_block, deposited_tokens *) (* stores users deposits*)
 field reward: Map ByStr20 Uint128 = Emp ByStr20 Uint128 (* user_address-> earnt_accum_reward *) (* calculates dynamically reward over time*)
@@ -362,44 +364,54 @@ procedure RewardIfEpoch()
                                                          next_epoch_block: next_epoch_plus_skipped; epochs_rewards_expire: rewards_plus_skipped_epoch };
       event e
     | False => (* calculate the reward *)
-         is_time_to_reward = builtin blt calculation_block now;  
-         match is_time_to_reward with
-          | True => (* now+1 and future blocks *)
-            (* how many epochs have we missed - RewardIfEpoch is triggered when users interact, so if left over multiple epochs, we can assume no state change happened between epochs *)
-            gap_between_epochs_as_uint256 = builtin bsub now calculation_block; (* 100621 - 100400 = 221 assume now>calculation_block*)
-            gap_between_epochs = int256_to_uint128 gap_between_epochs_as_uint256;
-            (* calculate how many epochs have been skipped*)
-            epochs_to_reward = builtin div gap_between_epochs epoch_calculation_period_length; (* 221 / 99 = 2 *) (* at minimum this will be 1, otherwise above match runs for false *)
-            (* calculate how many blocks have passed *)
-            future_epoch_over_time = builtin mul epoch_calculation_period_length epochs_to_reward; (* 99 * 2 = 198 *)
-            (* calculate how many rewards should be distributed for the missed epochs *)
-            rewards_generated = builtin mul reward_per_epoch epochs_to_reward; (*DEBUG*)
-            (* calculate when next epoch is (last+epochs=new_past)*)
-            new_past_epoch = builtin badd calculation_block future_epoch_over_time; 
-            (* calculate this_epoch from next_epoch (new_past+epochlength=new_future)*)
-            new_future_epoch = builtin badd new_past_epoch epoch_calculation_period_length;
-            (* pool has some amount>0, and it's time to reward 1 or more epochs *)
-            reward_map <- reward;
-            (* sum all old rewards with the newly eligible rewards *)
-            new_reward_map = get_updated_reward_map_if_eligible pool_to_list sum_at_epoch now epoch_calculation_period_length reward_per_epoch reward_map epochs_to_reward;
-            (* set reward *)
-            reward := new_reward_map;
-            (* set epoch state *)
-            previously_rewarded_epoch_block := new_past_epoch;
-            next_epoch_block := new_future_epoch; 
-            (* do not set epochs_rewards_expire here, as nothing has been skipped *)
-            e = {_eventname : "SnapshotRewardSuccess"; 
-                 triggered_for_epoch: calculation_block; 
-                 epochs_elapsed: epochs_to_reward;
-                 blocks_elapsed: future_epoch_over_time;
-                 new_past_epoch : new_future_epoch;
-                 previously_rewarded_epoch_block: new_past_epoch;
-                 rewards_generated:rewards_generated };
-            event e
-          | False => (* the past, noop *)
-            e = {_eventname : "IShouldNeverBeEmitted" };
-            event e
-        end
+      (* how many epochs have we missed - RewardIfEpoch is triggered when users interact, so if left over multiple epochs, we can assume no state change happened between epochs *)
+      gap_between_epochs_as_uint256 = builtin bsub now calculation_block; (* 100621 - 100400 = 221 assume now>calculation_block*)
+      gap_between_epochs = int256_to_uint128 gap_between_epochs_as_uint256;
+      (* calculate how many epochs have been skipped*)
+      epochs_to_reward = builtin div gap_between_epochs epoch_calculation_period_length; (* 221 / 99 = 2 *) (* at minimum this will be 1, otherwise above match runs for false *)
+      
+      (* is rewards left to claim? *)
+      rewards_epoch_left <- amount_of_epochs_to_reward;
+      is_greater_equal_than = uint128_ge epochs_to_reward  rewards_epoch_left; (* epochs = 8 rewards = 10 // left = 2 / reward = 8*)
+      match is_greater_equal_than with
+        | True => (* if epochs_to_reward is larger than rewards_epoch_left, we are way into the future, only reward rewards_epoch_left and set softpause true *)
+          (* calculate how many blocks have passed *)
+          future_epoch_over_time = builtin mul epoch_calculation_period_length epochs_to_reward; (* 99 * 2 = 198 *)
+          (* calculate how many rewards should be distributed for the missed epochs *)
+          rewards_generated = builtin mul reward_per_epoch epochs_to_reward; (*DEBUG*)
+          (* calculate when next epoch is (last+epochs=new_past)*)
+          new_past_epoch = builtin badd calculation_block future_epoch_over_time; 
+          (* calculate this_epoch from next_epoch (new_past+epochlength=new_future)*)
+          new_future_epoch = builtin badd new_past_epoch epoch_calculation_period_length;
+          (* pool has some amount>0, and it's time to reward 1 or more epochs *)
+          reward_map <- reward;
+          (* sum all old rewards with the newly eligible rewards *)
+          new_reward_map = get_updated_reward_map_if_eligible pool_to_list sum_at_epoch now epoch_calculation_period_length reward_per_epoch reward_map rewards_epoch_left;
+          (* set reward *)
+          reward := new_reward_map;
+          (* set epoch state *)
+          previously_rewarded_epoch_block := new_past_epoch;
+          next_epoch_block := new_future_epoch; 
+          (* set rewards left *)
+          new_epochs_remaining_to_reward = builtin sub rewards_epoch_left epochs_to_reward;
+          amount_of_epochs_to_reward := new_epochs_remaining_to_reward;
+          (* set softpause true*)
+          soft_pause := bool_true;
+          e = {_eventname : "MutiRewardForValidEpochsLeft"; rewarded_epochs: rewards_epoch_left };
+          event e;
+          e1 = {_eventname : "SnapshotRewardSuccess"; 
+                              triggered_for_epoch: calculation_block; 
+                              epochs_elapsed: epochs_to_reward;
+                              blocks_elapsed: future_epoch_over_time;
+                              new_past_epoch : new_future_epoch;
+                              previously_rewarded_epoch_block: new_past_epoch;
+                              rewards_generated:rewards_generated };
+          event e1
+        | False => (* rewarding mutiple, meaning some rewards will be leftover after rewarding *)
+        
+          e = {_eventname : "MutiRewardForEpochsElapsed"; rewarded_epochs: rewards_epoch_left };
+          event e
+      end
   end
 end
 
@@ -576,7 +588,11 @@ transition OwnerTopUpRewards(topup_amount: Uint128)
       rewards_expire <- epochs_rewards_expire;
       new_rewards_expire = builtin badd rewards_expire epoch_calculation_period_length;
       epochs_rewards_expire:= new_rewards_expire;
-      e = {_eventname : "OwnerSingleRewardTopUpSuccess"; amount_topped_up: topup_amount; contract_held: new_rewards_left; deposit_more_funds_at: new_rewards_expire};
+      (* set amount of epochs deposited *)
+      epochs_to_reward <- amount_of_epochs_to_reward;
+      epochs_to_reward_plus_one = builtin add epochs_to_reward uint128_one;
+      amount_of_epochs_to_reward := epochs_to_reward_plus_one;
+      e = {_eventname : "OwnerSingleRewardTopUpSuccess"; amount_topped_up: topup_amount; contract_held: new_rewards_left; deposit_more_funds_at: new_rewards_expire; amount_of_epochs_to_reward:epochs_to_reward_plus_one };
       event e
     | False => (* is mutiple? *)
       x = builtin div topup_amount reward_per_epoch;
@@ -593,7 +609,11 @@ transition OwnerTopUpRewards(topup_amount: Uint128)
           blocks_to_reward = builtin mul x epoch_calculation_period_length;
           new_rewards_expire = builtin badd rewards_expire blocks_to_reward;
           epochs_rewards_expire:= new_rewards_expire;
-          e = {_eventname : "OwnerMutiRewardTopUpSuccess"; amount_topped_up: topup_amount; contract_held: new_rewards_left; blocks_to_reward: blocks_to_reward; x: x};
+          (* set amount of epochs deposited *)
+          epochs_to_reward <- amount_of_epochs_to_reward;
+          epochs_to_reward_plus_x = builtin add epochs_to_reward x;
+          amount_of_epochs_to_reward := epochs_to_reward_plus_x;
+          e = {_eventname : "OwnerMutiRewardTopUpSuccess"; amount_topped_up: topup_amount; contract_held: new_rewards_left; blocks_to_reward: blocks_to_reward; x: x; amount_of_epochs_to_reward: epochs_to_reward_plus_x};      
           event e
         | False =>
           err = SentRewardsNotAMutipleOfRewardPerEpoch;
