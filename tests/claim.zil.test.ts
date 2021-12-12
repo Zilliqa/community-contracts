@@ -597,9 +597,6 @@ describe("staking contract", () => {
             const state = await zilliqa.contracts
               .at(globalStakingContractAddress)
               .getState();
-            console.log("--------------------")
-            console.log(JSON.stringify(state));
-            console.log("--------------------")
             if (testCase.want !== undefined && testCase.want.verifyState !== undefined) {
               expect(testCase.want.verifyState(state)).toBe(true);
             }

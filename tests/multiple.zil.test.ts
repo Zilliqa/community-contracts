@@ -4,7 +4,10 @@ import { getAddressFromPrivateKey, schnorr } from "@zilliqa-js/crypto";
 
 import {
   increaseBNum,
-  getJSONParams
+  getJSONParams,
+  verifyEventsVerbose,
+  verifyEvents,
+  getErrorMsg
 } from "./testutil";
 
 import {
@@ -13,6 +16,7 @@ import {
   CONTRACTS,
   FAUCET_PARAMS,
   asyncNoop,
+  STAKING_ERROR
 } from "./config";
 
 const JEST_WORKER_ID = Number(process.env["JEST_WORKER_ID"]);
@@ -290,9 +294,12 @@ describe("staking contract", () => {
           want: {
             verifyState: (state) => {
               return (
-                JSON.stringify(state.total_stake_per_cycle) ===
-                  `{"1":"10"}` &&
-                JSON.stringify(state.total_stake) === `"10"`
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"10"}` &&
+                JSON.stringify(state.total_stake) === `"10"` &&
+                JSON.stringify(state.last_cycle) === `"1"` &&
+                JSON.stringify(state.stakers_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":{"1":"10"}}` &&
+                JSON.stringify(state.stakers_total_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"10"}` &&
+                JSON.stringify(state.last_deposit_cycle) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"1"}`
               )
             }
           }
@@ -309,9 +316,9 @@ describe("staking contract", () => {
           want: {
             verifyState: (state) => {
               return (
-                JSON.stringify(state.total_stake_per_cycle) ===
-                  `{"1":"20"}` &&
-                JSON.stringify(state.total_stake) === `"20"`
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"20"}` &&
+                JSON.stringify(state.total_stake) === `"20"` &&
+                JSON.stringify(state.last_cycle) === `"1"`
               )
             }
           }
@@ -328,9 +335,9 @@ describe("staking contract", () => {
           want: {
             verifyState: (state) => {
               return (
-                JSON.stringify(state.total_stake_per_cycle) ===
-                  `{"1":"30"}` &&
-                JSON.stringify(state.total_stake) === `"30"`
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"30"}` &&
+                JSON.stringify(state.total_stake) === `"30"` &&
+                JSON.stringify(state.last_cycle) === `"1"`
               )
             }
           }
@@ -345,16 +352,30 @@ describe("staking contract", () => {
           },
           error: undefined,
           want: {
+            events: [
+              {
+                name: "check_rewards",
+                getParams: () => ({
+                  rewards: ["List (Pair (ByStr20) (Uint128))",
+                  [
+                    [globalToken1ContractAddress,"3333333333333"],
+                    [globalToken2ContractAddress,"3333333333333"],
+                  ]
+                ]
+                }),
+              }
+            ],
+            verifyEvents: verifyEventsVerbose,
             verifyState: (state) => {
               return (
-                JSON.stringify(state.total_stake_per_cycle) ===
-                  `{"1":"30","2":"30"}` &&
-                JSON.stringify(state.total_stake) === `"30"`
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"30","2":"30"}` &&
+                JSON.stringify(state.total_stake) === `"30"`,
+                JSON.stringify(state.last_cycle) === `"2"`
               )
             }
           }
         },
-         {
+        {
           name: "deposit from bob again",
           transition: "deposit",
           getSender: () => getTestAddr(Bob),
@@ -363,6 +384,15 @@ describe("staking contract", () => {
           }),
           beforeTransition: asyncNoop,
           error: undefined,
+          want: {
+            verifyState: (state) => {
+              return (
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"30","2":"40"}` &&
+                JSON.stringify(state.total_stake) === `"40"`,
+                JSON.stringify(state.last_cycle) === `"2"`
+              )
+            }
+          }
         },
         {
           name: "check rewards from bob after 1",
@@ -373,6 +403,31 @@ describe("staking contract", () => {
             await increaseBNum(zilliqa, 10);
           },
           error: undefined,
+          want: {
+            events: [
+              {
+                name: "check_rewards",
+                 // cycle 1: owner 10 alice 10 bob 10 => bob's rewards: 3333333333333
+                 // cycle 2: owner 10 alice 10 bob 20 => bob's rewards: 5000000000000
+                getParams: () => ({
+                  rewards: ["List (Pair (ByStr20) (Uint128))",
+                  [
+                    [globalToken1ContractAddress,"8333333333333"],
+                    [globalToken2ContractAddress,"8333333333333"],
+                  ]
+                ]
+                }),
+              }
+            ],
+            verifyEvents: verifyEventsVerbose,
+            verifyState: (state) => {
+              return (
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"30","2":"40","3":"40"}` &&
+                JSON.stringify(state.total_stake) === `"40"` &&
+                JSON.stringify(state.last_cycle) === `"3"`
+              )
+            }
+          }
         },
         {
           name: "claim from bob after 1",
@@ -381,6 +436,56 @@ describe("staking contract", () => {
           getParams: () => ({}),
           beforeTransition: asyncNoop,
           error: undefined,
+          want: {
+            events: [
+              {
+                name: "RewardClaim",
+                getParams: () => ({
+                  reward_list: ["List (Uint32)",["1","2"]]
+                }),
+              },
+              {
+                name: "TransferSuccess",
+                getParams: () => ({
+                  sender: ["ByStr20",globalStakingContractAddress],
+                  recipient: ["ByStr20",getTestAddr(OWNER)],
+                  amount: ["Uint128", "8333333333333"]
+                }),
+              },
+              {
+                name: "TransferSuccessCallBack",
+                getParams: () => ({
+                  sender: ["ByStr20", globalStakingContractAddress],
+                  recipient: ["ByStr20",getTestAddr(OWNER)],
+                  amount: ["Uint128", "8333333333333"]
+                }),
+              },
+              {
+                name: "TransferSuccess",
+                getParams: () => ({
+                  sender: ["ByStr20",globalStakingContractAddress],
+                  recipient: ["ByStr20",getTestAddr(OWNER)],
+                  amount: ["Uint128", "8333333333333"]
+                }),
+              },
+              {
+                name: "TransferSuccessCallBack",
+                getParams: () => ({
+                  sender: ["ByStr20", globalStakingContractAddress],
+                  recipient: ["ByStr20",getTestAddr(OWNER)],
+                  amount: ["Uint128", "8333333333333"]
+                }),
+              },
+            ],
+            verifyEvents: verifyEventsVerbose,
+            verifyState: (state) => {
+              return (
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"30","2":"40","3":"40"}` &&
+                JSON.stringify(state.total_stake) === `"40"` &&
+                JSON.stringify(state.last_cycle) === `"3"`
+              )
+            }
+          }
         },
         {
           name: "withdraw from bob",
@@ -388,7 +493,7 @@ describe("staking contract", () => {
           getSender: () => getTestAddr(Bob),
           getParams: () => ({}),
           beforeTransition: asyncNoop,
-          error: undefined,
+          error: STAKING_ERROR.StillInLockupPeriod,
         },
         {
           name: "check rewards from alice after 1",
@@ -399,6 +504,32 @@ describe("staking contract", () => {
             await increaseBNum(zilliqa, 10);
           },
           error: undefined,
+          want: {
+            events: [
+              {
+                name: "check_rewards",
+                // cycle 1: owner 10 alice 10 bob 10 => alice's rewards: 3333333333333
+                // cycle 2: owner 10 alice 10 bob 20 => alice's rewards: 2500000000000
+                // cycle 3: owner 10 alice 10 bob 20 => alice's rewards: 2500000000000
+                getParams: () => ({
+                  rewards: ["List (Pair (ByStr20) (Uint128))",
+                  [
+                    [globalToken1ContractAddress,"8333333333333"],
+                    [globalToken2ContractAddress,"8333333333333"],
+                  ]
+                ]
+                }),
+              }
+            ],
+            verifyEvents: verifyEventsVerbose,
+            verifyState: (state) => {
+              return (
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"30","2":"40","3":"40","4":"40"}` &&
+                JSON.stringify(state.total_stake) === `"40"` &&
+                JSON.stringify(state.last_cycle) === `"4"`
+              )
+            }
+          }
         },
         {
           name: "claim from alice",
@@ -407,6 +538,56 @@ describe("staking contract", () => {
           getParams: () => ({}),
           beforeTransition: asyncNoop,
           error: undefined,
+          want: {
+            events: [
+              {
+                name: "RewardClaim",
+                getParams: () => ({
+                  reward_list: ["List (Uint32)",["1","2","3"]]
+                }),
+              },
+              {
+                name: "TransferSuccess",
+                getParams: () => ({
+                  sender: ["ByStr20",globalStakingContractAddress],
+                  recipient: ["ByStr20",getTestAddr(OWNER)],
+                  amount: ["Uint128", "8333333333333"]
+                }),
+              },
+              {
+                name: "TransferSuccessCallBack",
+                getParams: () => ({
+                  sender: ["ByStr20", globalStakingContractAddress],
+                  recipient: ["ByStr20",getTestAddr(OWNER)],
+                  amount: ["Uint128", "8333333333333"]
+                }),
+              },
+              {
+                name: "TransferSuccess",
+                getParams: () => ({
+                  sender: ["ByStr20",globalStakingContractAddress],
+                  recipient: ["ByStr20",getTestAddr(OWNER)],
+                  amount: ["Uint128", "8333333333333"]
+                }),
+              },
+              {
+                name: "TransferSuccessCallBack",
+                getParams: () => ({
+                  sender: ["ByStr20", globalStakingContractAddress],
+                  recipient: ["ByStr20",getTestAddr(OWNER)],
+                  amount: ["Uint128", "8333333333333"]
+                }),
+              },
+            ],
+            verifyEvents: verifyEventsVerbose,
+            verifyState: (state) => {
+              return (
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"30","2":"40","3":"40","4":"40"}` &&
+                JSON.stringify(state.total_stake) === `"40"` &&
+                JSON.stringify(state.last_cycle) === `"4"`
+              )
+            }
+          }
         },
         {
           name: "claim from owner",
@@ -415,6 +596,56 @@ describe("staking contract", () => {
           getParams: () => ({}),
           beforeTransition: asyncNoop,
           error: undefined,
+          want: {
+            events: [
+              {
+                name: "RewardClaim",
+                getParams: () => ({
+                  reward_list: ["List (Uint32)",["1","2","3"]]
+                }),
+              },
+              {
+                name: "TransferSuccess",
+                getParams: () => ({
+                  sender: ["ByStr20",globalStakingContractAddress],
+                  recipient: ["ByStr20",getTestAddr(OWNER)],
+                  amount: ["Uint128", "8333333333333"]
+                }),
+              },
+              {
+                name: "TransferSuccessCallBack",
+                getParams: () => ({
+                  sender: ["ByStr20", globalStakingContractAddress],
+                  recipient: ["ByStr20",getTestAddr(OWNER)],
+                  amount: ["Uint128", "8333333333333"]
+                }),
+              },
+              {
+                name: "TransferSuccess",
+                getParams: () => ({
+                  sender: ["ByStr20",globalStakingContractAddress],
+                  recipient: ["ByStr20",getTestAddr(OWNER)],
+                  amount: ["Uint128", "8333333333333"]
+                }),
+              },
+              {
+                name: "TransferSuccessCallBack",
+                getParams: () => ({
+                  sender: ["ByStr20", globalStakingContractAddress],
+                  recipient: ["ByStr20",getTestAddr(OWNER)],
+                  amount: ["Uint128", "8333333333333"]
+                }),
+              },
+            ],
+            verifyEvents: verifyEventsVerbose,
+            verifyState: (state) => {
+              return (
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"30","2":"40","3":"40","4":"40"}` &&
+                JSON.stringify(state.total_stake) === `"40"` &&
+                JSON.stringify(state.last_cycle) === `"4"`
+              )
+            }
+          }
         },
         {
           name: "withdraw from alice",
@@ -422,7 +653,7 @@ describe("staking contract", () => {
           getSender: () => getTestAddr(Alice),
           getParams: () => ({}),
           beforeTransition: asyncNoop,
-          error: undefined,
+          error: STAKING_ERROR.StillInLockupPeriod,
         },
         {
           name: "withdraw from owner",
@@ -430,7 +661,7 @@ describe("staking contract", () => {
           getSender: () => getTestAddr(OWNER),
           getParams: () => ({}),
           beforeTransition: asyncNoop,
-          error: undefined,
+          error: STAKING_ERROR.StillInLockupPeriod,
         },
     ];
 
@@ -453,13 +684,23 @@ describe("staking contract", () => {
               if (!tx.receipt.success) {
                 throw new Error();
               }
+            } else {
+              expect(tx.receipt.exceptions[0].message).toBe(
+                getErrorMsg(testCase.error)
+              );
             }
-
-            if (testCase.want !== undefined && testCase.want.verifyState !== undefined) {
-              const state = await zilliqa.contracts
+            const state = await zilliqa.contracts
               .at(globalStakingContractAddress)
               .getState();
+
+            if (testCase.want !== undefined && testCase.want.verifyState !== undefined) {
               expect(testCase.want.verifyState(state)).toBe(true);
+            }
+            if (testCase.want !== undefined && testCase.want.events !== undefined) {
+              const checkEvents = testCase.want.verifyEvents || verifyEvents;
+              expect(checkEvents(tx.receipt.event_logs, testCase.want.events)).toBe(
+                true
+              );
             }
         });
     }
