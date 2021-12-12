@@ -327,9 +327,7 @@ procedure setup_rewards_distribution(p: RewardsCalculation)
   match p with
   | RewardsCalculation token_address rewarding_amount user_stake total_stake_amount =>
     reward = muldiv rewarding_amount user_stake total_stake_amount;
-    increase_rewards_tmp token_address reward;
-    e = { _eventname: "setup_rewards_distribution"; token_address: token_address; reward: reward};
-    event e
+    increase_rewards_tmp token_address reward
   end
 end
 
@@ -378,8 +376,6 @@ procedure calculate_rewards(cycle: Uint32)
   total_stake_per_opt <- total_stake_per_cycle[cycle];
   match total_stake_per_opt with
   | Some total_stake_amount =>
-    e = { _eventname: "calculate_rewards"; total_stake: total_stake_amount; user_stake_this_cycle: user_stake_this_cycle };
-    event e;
     is_total_stake_zero = builtin eq u128_zero total_stake_amount;
     match is_total_stake_zero with
     | True =>
