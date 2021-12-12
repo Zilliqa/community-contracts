@@ -207,12 +207,16 @@ export const getJSONParams = (obj) => {
   return result;
 };
 
-export const verifyEvents = (events, want) => {
+export const verifyEventsVerbose = (events, want) => {
   if (events === undefined) {
     return want === undefined;
   }
 
   for (const [index, event] of events.entries()) {
+    if (want[index] === undefined) {
+      // just skip
+      continue;
+    }
     if (event._eventname !== want[index].name) {
       logDelta(want[index].name, event._eventname);
       return false;
@@ -220,11 +224,67 @@ export const verifyEvents = (events, want) => {
 
     const wantParams = getJSONParams(want[index].getParams());
 
-    if (JSON.stringify(event.params) !== JSON.stringify(wantParams)) {
-      logDelta(wantParams, JSON.stringify(event.params));
-      return false;
+    let areSetsEqual = (a, b) => a.size === b.size && [...a].every(value => b.has(value));
+
+    if (Array.isArray(event.params) && Array.isArray(wantParams)) {
+      let actualType = new Set();
+      let expectedType = new Set();
+      let actualName = new Set();
+      let expectedName = new Set();
+      let actualValue = new Set();
+      let expectedValue = new Set();
+
+      for (const e of event.params as any[]) {
+        actualType.add(JSON.stringify(e.type));
+        actualName.add(JSON.stringify(e.vname));
+        for (const v of e.value) {
+          actualValue.add(JSON.stringify(v))
+        }
+      }
+
+      for (const e of wantParams as any[]) {
+        expectedType.add(JSON.stringify(e.type));
+        expectedName.add(JSON.stringify(e.vname));
+        for (const v of e.value) {
+          expectedValue.add(JSON.stringify(v))
+        }
+      }
+
+      if (!areSetsEqual(actualType,expectedType) || !areSetsEqual(actualName,expectedName) || !areSetsEqual(actualValue,expectedValue)) {
+        return false;
+      }
+    } else {
+      if (JSON.stringify(event.params) !== JSON.stringify(wantParams)) {
+        logDelta(JSON.stringify(wantParams), JSON.stringify(event.params));
+        return false;
+      }
     }
   }
+  return true;
+};
+
+
+export const verifyEvents = (events, want) => {
+  if (events === undefined) {
+    return want === undefined;
+  }
+
+  for (const [index, event] of events.entries()) {
+    if (want[index] === undefined) {
+      // just skip
+      continue;
+    }
+    if (event._eventname !== want[index].name) {
+      logDelta(want[index].name, event._eventname);
+      return false;
+    }
+
+    const wantParams = getJSONParams(want[index].getParams());
+    if (JSON.stringify(event.params) !== JSON.stringify(wantParams)) {
+        logDelta(JSON.stringify(wantParams), JSON.stringify(event.params));
+        return false;
+      }
+    }
   return true;
 };
 
