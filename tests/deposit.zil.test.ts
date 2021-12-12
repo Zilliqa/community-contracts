@@ -191,7 +191,14 @@ describe("staking contract", () => {
           beforeTransition: asyncNoop,
           error: undefined,
           getParams: () => ({}),
-          want: undefined
+          want: {
+            verifyState: (state) => {
+              return (
+                JSON.stringify(state.paused) === `{"argtypes":[],"arguments":[],"constructor":"False"}` &&
+                JSON.stringify(state.last_cycle) === `"1"`
+              )
+            }
+          }
         },
         {
           name: "deposit once",
@@ -205,9 +212,12 @@ describe("staking contract", () => {
           want: {
             verifyState: (state) => {
               return (
-                JSON.stringify(state.total_stake_per_cycle) ===
-                  `{"1":"10"}` &&
-                JSON.stringify(state.total_stake) === `"10"`
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"10"}` &&
+                JSON.stringify(state.total_stake) === `"10"` &&
+                JSON.stringify(state.last_cycle) === `"1"` &&
+                JSON.stringify(state.stakers_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":{"1":"10"}}` &&
+                JSON.stringify(state.stakers_total_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"10"}` &&
+                JSON.stringify(state.last_deposit_cycle) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"1"}`
               )
             }
           }
@@ -226,9 +236,12 @@ describe("staking contract", () => {
           want: {
             verifyState: (state) => {
               return (
-                JSON.stringify(state.total_stake_per_cycle) ===
-                  `{"1":"20"}` &&
-                  JSON.stringify(state.total_stake) === `"20"`
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"20"}` &&
+                JSON.stringify(state.total_stake) === `"20"` &&
+                JSON.stringify(state.last_cycle) === `"1"` &&
+                JSON.stringify(state.stakers_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":{"1":"20"}}` &&
+                JSON.stringify(state.stakers_total_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"20"}` &&
+                JSON.stringify(state.last_deposit_cycle) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"1"}`
               )
             }
           }
@@ -247,9 +260,12 @@ describe("staking contract", () => {
           want: {
             verifyState: (state) => {
               return (
-                JSON.stringify(state.total_stake_per_cycle) ===
-                  `{"1":"20","2":"30"}` &&
-                  JSON.stringify(state.total_stake) === `"30"`
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"20","2":"30"}` &&
+                JSON.stringify(state.total_stake) === `"30"` &&
+                JSON.stringify(state.last_cycle) === `"2"` &&
+                JSON.stringify(state.stakers_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":{"1":"20","2":"10"}}` &&
+                JSON.stringify(state.stakers_total_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"30"}` &&
+                JSON.stringify(state.last_deposit_cycle) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"2"}`
               )
             }
           },
@@ -268,9 +284,12 @@ describe("staking contract", () => {
           want: {
             verifyState: (state) => {
               return (
-                JSON.stringify(state.total_stake_per_cycle) ===
-                  `{"1":"20","2":"30","3":"30","4":"30","5":"40"}` &&
-                  JSON.stringify(state.total_stake) === `"40"`
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"20","2":"30","3":"30","4":"30","5":"40"}` &&
+                JSON.stringify(state.total_stake) === `"40"` &&
+                JSON.stringify(state.last_cycle) === `"5"` &&
+                JSON.stringify(state.stakers_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":{"1":"20","2":"10","5":"10"}}` &&
+                JSON.stringify(state.stakers_total_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"40"}` &&
+                JSON.stringify(state.last_deposit_cycle) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"5"}`
               )
             }
           },
@@ -297,11 +316,11 @@ describe("staking contract", () => {
                 throw new Error();
               }
             }
+            const state = await zilliqa.contracts
+            .at(globalStakingContractAddress)
+            .getState();
 
             if (testCase.want !== undefined && testCase.want.verifyState !== undefined) {
-              const state = await zilliqa.contracts
-              .at(globalStakingContractAddress)
-              .getState();
               expect(testCase.want.verifyState(state)).toBe(true);
             }
         });
