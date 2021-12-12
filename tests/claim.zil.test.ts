@@ -4,7 +4,8 @@ import { getAddressFromPrivateKey, schnorr } from "@zilliqa-js/crypto";
 
 import {
   increaseBNum,
-  getJSONParams
+  getJSONParams,
+  verifyEvents
 } from "./testutil";
 
 import {
@@ -255,9 +256,12 @@ describe("staking contract", () => {
           want: {
             verifyState: (state) => {
               return (
-                JSON.stringify(state.total_stake_per_cycle) ===
-                  `{"1":"10"}` &&
-                JSON.stringify(state.total_stake) === `"10"`
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"10"}` &&
+                JSON.stringify(state.total_stake) === `"10"` &&
+                JSON.stringify(state.last_cycle) === `"1"` &&
+                JSON.stringify(state.stakers_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":{"1":"10"}}` &&
+                JSON.stringify(state.stakers_total_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"10"}` &&
+                JSON.stringify(state.last_deposit_cycle) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"1"}`
               )
             }
           }
@@ -270,11 +274,22 @@ describe("staking contract", () => {
           beforeTransition: asyncNoop,
           error: undefined,
           want: {
+            events: [
+              {
+                name: "check_rewards",
+                getParams: () => ({
+                  rewards: ["List (Pair (ByStr20) (Uint128))",[]]
+                }),
+              }
+            ],
             verifyState: (state) => {
               return (
-                JSON.stringify(state.total_stake_per_cycle) ===
-                  `{"1":"10"}` &&
-                JSON.stringify(state.total_stake) === `"10"`
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"10"}` &&
+                JSON.stringify(state.total_stake) === `"10"` &&
+                JSON.stringify(state.last_cycle) === `"1"` &&
+                JSON.stringify(state.stakers_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":{"1":"10"}}` &&
+                JSON.stringify(state.stakers_total_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"10"}` &&
+                JSON.stringify(state.last_deposit_cycle) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"1"}`
               )
             }
           }
@@ -289,9 +304,12 @@ describe("staking contract", () => {
           want: {
             verifyState: (state) => {
               return (
-                JSON.stringify(state.total_stake_per_cycle) ===
-                  `{"1":"10"}` &&
-                JSON.stringify(state.total_stake) === `"10"`
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"10"}` &&
+                JSON.stringify(state.total_stake) === `"10"` &&
+                JSON.stringify(state.last_cycle) === `"1"` &&
+                JSON.stringify(state.stakers_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":{"1":"10"}}` &&
+                JSON.stringify(state.stakers_total_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"10"}` &&
+                JSON.stringify(state.last_deposit_cycle) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"1"}`
               )
             }
           }
@@ -305,6 +323,31 @@ describe("staking contract", () => {
             await increaseBNum(zilliqa, 10);
           },
           error: undefined,
+          want: {
+            events: [
+              {
+                name: "check_rewards",
+                getParams: () => ({
+                  rewards: ["List (Pair (ByStr20) (Uint128))",
+                  [
+                    [globalToken1ContractAddress,"10000000000000"],
+                    [globalToken2ContractAddress,"10000000000000"],
+                  ]
+                ]
+                }),
+              }
+            ],
+            verifyState: (state) => {
+              return (
+                JSON.stringify(state.total_stake_per_cycle) === `{"1":"10","2":"10"}` &&
+                JSON.stringify(state.total_stake) === `"10"` &&
+                JSON.stringify(state.last_cycle) === `"2"` &&
+                JSON.stringify(state.stakers_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":{"1":"10"}}` &&
+                JSON.stringify(state.stakers_total_bal) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"10"}` &&
+                JSON.stringify(state.last_deposit_cycle) === `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"1"}`
+              )
+            }
+          }
         },
         {
           name: "claim on next cycle",
@@ -370,11 +413,19 @@ describe("staking contract", () => {
                 throw new Error();
               }
             }
-            if (testCase.want !== undefined && testCase.want.verifyState !== undefined) {
-              const state = await zilliqa.contracts
+            const state = await zilliqa.contracts
               .at(globalStakingContractAddress)
               .getState();
+            console.log("--------------------")
+            console.log(JSON.stringify(state));
+            console.log("--------------------")
+            if (testCase.want !== undefined && testCase.want.verifyState !== undefined) {
               expect(testCase.want.verifyState(state)).toBe(true);
+            }
+            if (testCase.want !== undefined && testCase.want.events !== undefined) {
+              expect(verifyEvents(tx.receipt.event_logs, testCase.want.events)).toBe(
+                true
+              );
             }
         });
     }
