@@ -5,7 +5,7 @@ import { getAddressFromPrivateKey, schnorr } from "@zilliqa-js/crypto";
 import {
   increaseBNum,
   getJSONParams,
-  verifyEventsVerbose,
+  verifyCheckRewardsEvents,
   verifyEvents,
   getErrorMsg,
 } from "./testutil";
@@ -349,7 +349,7 @@ describe("staking contract", () => {
             }),
           },
         ],
-        verifyEvents: verifyEventsVerbose,
+        verifyEvents: verifyCheckRewardsEvents,
         verifyState: (state) => {
           return (
             JSON.stringify(state.total_stake_per_cycle) ===
@@ -406,7 +406,7 @@ describe("staking contract", () => {
             }),
           },
         ],
-        verifyEvents: verifyEventsVerbose,
+        verifyEvents: verifyCheckRewardsEvents,
         verifyState: (state) => {
           return (
             JSON.stringify(state.total_stake_per_cycle) ===
@@ -510,7 +510,7 @@ describe("staking contract", () => {
             }),
           },
         ],
-        verifyEvents: verifyEventsVerbose,
+        verifyEvents: verifyCheckRewardsEvents,
         verifyState: (state) => {
           return (
             JSON.stringify(state.total_stake_per_cycle) ===

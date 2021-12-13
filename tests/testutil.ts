@@ -207,7 +207,7 @@ export const getJSONParams = (obj) => {
   return result;
 };
 
-export const verifyEventsVerbose = (events, want) => {
+export const verifyCheckRewardsEvents = (events, want) => {
   if (events === undefined) {
     return want === undefined;
   }

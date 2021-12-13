@@ -6,7 +6,7 @@ import {
   increaseBNum,
   getJSONParams,
   verifyEvents,
-  verifyEventsVerbose,
+  verifyCheckRewardsEvents,
 } from "./testutil";
 
 import { API, TX_PARAMS, CONTRACTS, FAUCET_PARAMS, asyncNoop } from "./config";
@@ -335,7 +335,7 @@ describe("staking contract", () => {
             }),
           },
         ],
-        verifyEvents: verifyEventsVerbose,
+        verifyEvents: verifyCheckRewardsEvents,
         verifyState: (state) => {
           return (
             JSON.stringify(state.total_stake_per_cycle) ===
@@ -505,7 +505,7 @@ describe("staking contract", () => {
             }),
           },
         ],
-        verifyEvents: verifyEventsVerbose,
+        verifyEvents: verifyCheckRewardsEvents,
         verifyState: (state) => {
           return (
             JSON.stringify(state.total_stake_per_cycle) ===
