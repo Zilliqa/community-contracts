@@ -57,6 +57,8 @@ export const FAUCET_PARAMS = {
 
 export const STAKING_ERROR = {
   UserHasUnclaimedReward: -7,
+  StillInLockupPeriod: -9,
+  OutofLockupPeriod: -10,
 };
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
