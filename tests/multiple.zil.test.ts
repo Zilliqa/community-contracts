@@ -147,7 +147,6 @@ beforeAll(async () => {
   if (!tx0.receipt.success) {
     throw new Error();
   }
-  console.log(tx0.receipt);
 
   const tx1: any = await zilliqa.contracts.at(globalToken1ContractAddress).call(
     "Transfer",
