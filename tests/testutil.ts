@@ -224,7 +224,8 @@ export const verifyEventsVerbose = (events, want) => {
 
     const wantParams = getJSONParams(want[index].getParams());
 
-    let areSetsEqual = (a, b) => a.size === b.size && [...a].every(value => b.has(value));
+    let areSetsEqual = (a, b) =>
+      a.size === b.size && [...a].every((value) => b.has(value));
 
     if (Array.isArray(event.params) && Array.isArray(wantParams)) {
       let actualType = new Set();
@@ -238,7 +239,7 @@ export const verifyEventsVerbose = (events, want) => {
         actualType.add(JSON.stringify(e.type));
         actualName.add(JSON.stringify(e.vname));
         for (const v of e.value) {
-          actualValue.add(JSON.stringify(v))
+          actualValue.add(JSON.stringify(v));
         }
       }
 
@@ -246,11 +247,15 @@ export const verifyEventsVerbose = (events, want) => {
         expectedType.add(JSON.stringify(e.type));
         expectedName.add(JSON.stringify(e.vname));
         for (const v of e.value) {
-          expectedValue.add(JSON.stringify(v))
+          expectedValue.add(JSON.stringify(v));
         }
       }
 
-      if (!areSetsEqual(actualType,expectedType) || !areSetsEqual(actualName,expectedName) || !areSetsEqual(actualValue,expectedValue)) {
+      if (
+        !areSetsEqual(actualType, expectedType) ||
+        !areSetsEqual(actualName, expectedName) ||
+        !areSetsEqual(actualValue, expectedValue)
+      ) {
         return false;
       }
     } else {
@@ -262,7 +267,6 @@ export const verifyEventsVerbose = (events, want) => {
   }
   return true;
 };
-
 
 export const verifyEvents = (events, want) => {
   if (events === undefined) {
@@ -281,10 +285,10 @@ export const verifyEvents = (events, want) => {
 
     const wantParams = getJSONParams(want[index].getParams());
     if (JSON.stringify(event.params) !== JSON.stringify(wantParams)) {
-        logDelta(JSON.stringify(wantParams), JSON.stringify(event.params));
-        return false;
-      }
+      logDelta(JSON.stringify(wantParams), JSON.stringify(event.params));
+      return false;
     }
+  }
   return true;
 };
 
