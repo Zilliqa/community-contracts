@@ -160,7 +160,6 @@ beforeAll(async () => {
   if (!tx1.receipt.success) {
     throw new Error();
   }
-  console.log(tx1.receipt);
 
   const tx2: any = await zilliqa.contracts.at(globalToken2ContractAddress).call(
     "Transfer",
@@ -173,7 +172,6 @@ beforeAll(async () => {
   if (!tx2.receipt.success) {
     throw new Error();
   }
-  console.log(tx2.receipt);
 
   const tx3: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
@@ -188,7 +186,6 @@ beforeAll(async () => {
   if (!tx3.receipt.success) {
     throw new Error();
   }
-  console.log(tx3.receipt);
 
   const tx4: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
@@ -203,7 +200,6 @@ beforeAll(async () => {
   if (!tx4.receipt.success) {
     throw new Error();
   }
-  console.log(tx4.receipt);
 
   const tx5: any = await zilliqa.contracts.at(globalToken0ContractAddress).call(
     "Transfer",
@@ -216,7 +212,6 @@ beforeAll(async () => {
   if (!tx5.receipt.success) {
     throw new Error();
   }
-  console.log(tx5.receipt);
 
   const tx6: any = await zilliqa.contracts.at(globalToken0ContractAddress).call(
     "Transfer",
@@ -229,7 +224,6 @@ beforeAll(async () => {
   if (!tx6.receipt.success) {
     throw new Error();
   }
-  console.log(tx6.receipt);
 
   zilliqa.wallet.setDefault(getTestAddr(Alice));
   const tx7: any = await zilliqa.contracts.at(globalToken0ContractAddress).call(
@@ -243,7 +237,6 @@ beforeAll(async () => {
   if (!tx7.receipt.success) {
     throw new Error();
   }
-  console.log(tx7.receipt);
 
   zilliqa.wallet.setDefault(getTestAddr(Bob));
   const tx8: any = await zilliqa.contracts.at(globalToken0ContractAddress).call(
@@ -257,7 +250,6 @@ beforeAll(async () => {
   if (!tx8.receipt.success) {
     throw new Error();
   }
-  console.log(tx8.receipt);
 });
 
 describe("staking contract", () => {
@@ -657,7 +649,6 @@ describe("staking contract", () => {
 
   for (const testCase of testCases) {
     it(`${testCase.transition}: ${testCase.name}`, async () => {
-      console.log("testing: ", testCase.name);
       await testCase.beforeTransition();
 
       zilliqa.wallet.setDefault(testCase.getSender());
@@ -669,7 +660,6 @@ describe("staking contract", () => {
           TX_PARAMS
         );
       console.log("transaction id = ", tx.id);
-      console.log(tx.receipt);
       if (testCase.error === undefined) {
         if (!tx.receipt.success) {
           throw new Error();

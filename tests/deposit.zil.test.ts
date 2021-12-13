@@ -139,7 +139,6 @@ beforeAll(async () => {
   if (!tx0.receipt.success) {
     throw new Error();
   }
-  console.log(tx0.receipt);
 
   const tx1: any = await zilliqa.contracts.at(globalToken1ContractAddress).call(
     "IncreaseAllowance",
@@ -152,7 +151,6 @@ beforeAll(async () => {
   if (!tx1.receipt.success) {
     throw new Error();
   }
-  console.log(tx1.receipt);
 
   const tx2: any = await zilliqa.contracts.at(globalToken2ContractAddress).call(
     "IncreaseAllowance",
@@ -165,7 +163,6 @@ beforeAll(async () => {
   if (!tx2.receipt.success) {
     throw new Error();
   }
-  console.log(tx2.receipt);
 });
 
 describe("staking contract", () => {
@@ -303,7 +300,6 @@ describe("staking contract", () => {
 
   for (const testCase of testCases) {
     it(`${testCase.transition}: ${testCase.name}`, async () => {
-      console.log("testing: ", testCase.name);
       await testCase.beforeTransition();
 
       zilliqa.wallet.setDefault(testCase.getSender());
@@ -315,7 +311,6 @@ describe("staking contract", () => {
           TX_PARAMS
         );
       console.log("transaction id = ", tx.id);
-      console.log(tx.receipt);
       if (testCase.error === undefined) {
         if (!tx.receipt.success) {
           throw new Error();
