@@ -390,9 +390,7 @@ procedure setup_rewards_distribution_tmp(p: RewardsCalculation)
   match p with
   | RewardsCalculation token_address rewarding_amount user_stake total_stake_amount =>
     reward = muldiv rewarding_amount user_stake total_stake_amount;
-    increase_rewards_tmp token_address reward;
-    e = { _eventname: "setup_rewards_distribution"; token_address: token_address; reward: reward};
-    event e
+    increase_rewards_tmp token_address reward
   end
 end
 
