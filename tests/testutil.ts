@@ -224,45 +224,19 @@ export const verifyEventsVerbose = (events, want) => {
 
     const wantParams = getJSONParams(want[index].getParams());
 
-    let areSetsEqual = (a, b) =>
-      a.size === b.size && [...a].every((value) => b.has(value));
-
     if (Array.isArray(event.params) && Array.isArray(wantParams)) {
-      let actualType = new Set();
-      let expectedType = new Set();
-      let actualName = new Set();
-      let expectedName = new Set();
-      let actualValue = new Set();
-      let expectedValue = new Set();
-
       for (const e of event.params as any[]) {
-        actualType.add(JSON.stringify(e.type));
-        actualName.add(JSON.stringify(e.vname));
-        for (const v of e.value) {
-          actualValue.add(JSON.stringify(v));
-        }
+        e.value.sort((a, b) => (a.arguments[0] < b.arguments[0] ? 1 : -1));
       }
 
       for (const e of wantParams as any[]) {
-        expectedType.add(JSON.stringify(e.type));
-        expectedName.add(JSON.stringify(e.vname));
-        for (const v of e.value) {
-          expectedValue.add(JSON.stringify(v));
-        }
+        e.value.sort((a, b) => (a.arguments[0] < b.arguments[0] ? 1 : -1));
       }
+    }
 
-      if (
-        !areSetsEqual(actualType, expectedType) ||
-        !areSetsEqual(actualName, expectedName) ||
-        !areSetsEqual(actualValue, expectedValue)
-      ) {
-        return false;
-      }
-    } else {
-      if (JSON.stringify(event.params) !== JSON.stringify(wantParams)) {
-        logDelta(JSON.stringify(wantParams), JSON.stringify(event.params));
-        return false;
-      }
+    if (JSON.stringify(event.params) !== JSON.stringify(wantParams)) {
+      logDelta(JSON.stringify(wantParams), JSON.stringify(event.params));
+      return false;
     }
   }
   return true;

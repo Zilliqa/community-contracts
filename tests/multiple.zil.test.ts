@@ -436,7 +436,7 @@ describe("staking contract", () => {
             name: "TransferSuccess",
             getParams: () => ({
               sender: ["ByStr20", globalStakingContractAddress],
-              recipient: ["ByStr20", getTestAddr(OWNER)],
+              recipient: ["ByStr20", getTestAddr(Bob)],
               amount: ["Uint128", "8333333333333"],
             }),
           },
@@ -444,7 +444,7 @@ describe("staking contract", () => {
             name: "TransferSuccessCallBack",
             getParams: () => ({
               sender: ["ByStr20", globalStakingContractAddress],
-              recipient: ["ByStr20", getTestAddr(OWNER)],
+              recipient: ["ByStr20", getTestAddr(Bob)],
               amount: ["Uint128", "8333333333333"],
             }),
           },
@@ -452,7 +452,7 @@ describe("staking contract", () => {
             name: "TransferSuccess",
             getParams: () => ({
               sender: ["ByStr20", globalStakingContractAddress],
-              recipient: ["ByStr20", getTestAddr(OWNER)],
+              recipient: ["ByStr20", getTestAddr(Bob)],
               amount: ["Uint128", "8333333333333"],
             }),
           },
@@ -460,12 +460,11 @@ describe("staking contract", () => {
             name: "TransferSuccessCallBack",
             getParams: () => ({
               sender: ["ByStr20", globalStakingContractAddress],
-              recipient: ["ByStr20", getTestAddr(OWNER)],
+              recipient: ["ByStr20", getTestAddr(Bob)],
               amount: ["Uint128", "8333333333333"],
             }),
           },
         ],
-        verifyEvents: verifyEventsVerbose,
         verifyState: (state) => {
           return (
             JSON.stringify(state.total_stake_per_cycle) ===
@@ -541,7 +540,7 @@ describe("staking contract", () => {
             name: "TransferSuccess",
             getParams: () => ({
               sender: ["ByStr20", globalStakingContractAddress],
-              recipient: ["ByStr20", getTestAddr(OWNER)],
+              recipient: ["ByStr20", getTestAddr(Alice)],
               amount: ["Uint128", "8333333333333"],
             }),
           },
@@ -549,7 +548,7 @@ describe("staking contract", () => {
             name: "TransferSuccessCallBack",
             getParams: () => ({
               sender: ["ByStr20", globalStakingContractAddress],
-              recipient: ["ByStr20", getTestAddr(OWNER)],
+              recipient: ["ByStr20", getTestAddr(Alice)],
               amount: ["Uint128", "8333333333333"],
             }),
           },
@@ -557,7 +556,7 @@ describe("staking contract", () => {
             name: "TransferSuccess",
             getParams: () => ({
               sender: ["ByStr20", globalStakingContractAddress],
-              recipient: ["ByStr20", getTestAddr(OWNER)],
+              recipient: ["ByStr20", getTestAddr(Alice)],
               amount: ["Uint128", "8333333333333"],
             }),
           },
@@ -565,12 +564,11 @@ describe("staking contract", () => {
             name: "TransferSuccessCallBack",
             getParams: () => ({
               sender: ["ByStr20", globalStakingContractAddress],
-              recipient: ["ByStr20", getTestAddr(OWNER)],
+              recipient: ["ByStr20", getTestAddr(Alice)],
               amount: ["Uint128", "8333333333333"],
             }),
           },
         ],
-        verifyEvents: verifyEventsVerbose,
         verifyState: (state) => {
           return (
             JSON.stringify(state.total_stake_per_cycle) ===
@@ -629,7 +627,6 @@ describe("staking contract", () => {
             }),
           },
         ],
-        verifyEvents: verifyEventsVerbose,
         verifyState: (state) => {
           return (
             JSON.stringify(state.total_stake_per_cycle) ===
