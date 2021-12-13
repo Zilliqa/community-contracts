@@ -225,13 +225,13 @@ export const verifyEventsVerbose = (events, want) => {
     const wantParams = getJSONParams(want[index].getParams());
 
     if (Array.isArray(event.params) && Array.isArray(wantParams)) {
-      for (const e of event.params as any[]) {
+      event.params.map((e) => {
         e.value.sort((a, b) => (a.arguments[0] < b.arguments[0] ? 1 : -1));
-      }
+      });
 
-      for (const e of wantParams as any[]) {
+      wantParams.map((e) => {
         e.value.sort((a, b) => (a.arguments[0] < b.arguments[0] ? 1 : -1));
-      }
+      });
     }
 
     if (JSON.stringify(event.params) !== JSON.stringify(wantParams)) {
