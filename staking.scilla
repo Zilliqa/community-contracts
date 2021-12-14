@@ -598,11 +598,9 @@ transition deposit(amount: Uint128)
   event e
 end
 
-transition claim()
-  is_unpaused;
-  update_stake_map_onchange u128_zero;
 
-  last_withdraw_cycle_opt <- last_withdraw_cycle[_sender];
+procedure claim_procedure(user: ByStr20)
+  last_withdraw_cycle_opt <- last_withdraw_cycle[user];
   last_withdraw_cycle_int = get_uint32_opt last_withdraw_cycle_opt;
   last_cycle_local <- last_cycle;
 
@@ -615,7 +613,14 @@ transition claim()
   forall reward_list calculate_rewards;
   send_rewards_distribution;
   last_withdraw_cycle_local = builtin sub last_cycle_local uint32_one;
-  last_withdraw_cycle[_sender] := last_withdraw_cycle_local
+  last_withdraw_cycle[user] := last_withdraw_cycle_local
+end
+
+
+transition claim()
+  is_unpaused;
+  update_stake_map_onchange u128_zero;
+  claim_procedure _sender
 end
 
 transition check_rewards()
@@ -657,10 +662,7 @@ transition withdraw()
   (* move last_cycle in case user has some unclaimed rewards *)
   update_stake_map_onchange u128_zero;
 
-  (* check unclaimed rewards *)
-  last_withdraw_cycle_opt <- last_withdraw_cycle[_sender];
-  last_withdraw_cycle_int = get_uint32_opt last_withdraw_cycle_opt;
-  check_unclaimed_rewards last_withdraw_cycle_int;
+  claim_procedure _sender;
 
   (* get original stake amount *)
   stake_amount_opt <- stakers_total_bal[_sender];
@@ -694,10 +696,7 @@ transition withdraw_by_loss()
   (* move last_cycle in case user has some unclaimed rewards *)
   update_stake_map_onchange u128_zero;
 
-  (* check unclaimed rewards *)
-  last_withdraw_cycle_opt <- last_withdraw_cycle[_sender];
-  last_withdraw_cycle_int = get_uint32_opt last_withdraw_cycle_opt;
-  check_unclaimed_rewards last_withdraw_cycle_int;
+  claim_procedure _sender;
 
   (* get original stake amount *)
   stake_amount_opt <- stakers_total_bal[_sender];

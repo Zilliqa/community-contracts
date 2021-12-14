@@ -268,36 +268,13 @@ describe("staking contract", () => {
       },
     },
     {
-      name: "withdraw with rewards",
-      transition: "withdraw",
+      name: "claim",
+      transition: "claim",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: async () => {
         await increaseBNum(zilliqa, 100);
       },
-      error: STAKING_ERROR.UserHasUnclaimedReward,
-      want: {
-        verifyState: (state) => {
-          return (
-            JSON.stringify(state.total_stake_per_cycle) === `{"1":"10"}` &&
-            JSON.stringify(state.total_stake) === `"10"` &&
-            JSON.stringify(state.last_cycle) === `"1"` &&
-            JSON.stringify(state.stakers_bal) ===
-              `{"${getTestAddr(OWNER).toLocaleLowerCase()}":{"1":"10"}}` &&
-            JSON.stringify(state.stakers_total_bal) ===
-              `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"10"}` &&
-            JSON.stringify(state.last_deposit_cycle) ===
-              `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"1"}`
-          );
-        },
-      },
-    },
-    {
-      name: "claim",
-      transition: "claim",
-      getSender: () => getTestAddr(OWNER),
-      getParams: () => ({}),
-      beforeTransition: asyncNoop,
       error: undefined,
       want: {
         verifyState: (state) => {
