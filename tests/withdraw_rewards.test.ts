@@ -304,6 +304,22 @@ describe("staking contract", () => {
               amount: ["Uint128", "100000000000000"],
             }),
           },
+          {
+            name: "TransferSuccess",
+            getParams: () => ({
+              sender: ["ByStr20", globalStakingContractAddress],
+              recipient: ["ByStr20", getTestAddr(OWNER)],
+              amount: ["Uint128", "10"],
+            }),
+          },
+          {
+            name: "TransferSuccessCallBack",
+            getParams: () => ({
+              sender: ["ByStr20", globalStakingContractAddress],
+              recipient: ["ByStr20", getTestAddr(OWNER)],
+              amount: ["Uint128", "10"],
+            }),
+          },
         ],
         verifyState: (state) => {
           return (
