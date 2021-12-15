@@ -114,7 +114,7 @@ beforeAll(async () => {
     init_staking_token_address: ["ByStr20", globalToken0ContractAddress],
     blocks_per_cycle: ["Uint256", "10"],
     token_addr: ["ByStr20", globalToken2ContractAddress],
-    token_rewards: ["Uint128", "10000000000000"]
+    token_rewards: ["Uint128", "10000000000000"],
   });
 
   [, contract] = await zilliqa.contracts

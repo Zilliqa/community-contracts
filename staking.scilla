@@ -574,6 +574,16 @@ transition unpause()
   event e
 end
 
+transition update_start_block(block: Uint256)
+  is_owner _sender;
+  start_block := block
+end
+
+transition update_end_block(block: Uint256)
+  is_owner _sender;
+  end_block := block
+end
+
 (* The next two transitions allow to initiate the reward pool *)
 (* Should be used carefully, and ideally right after the deployment and before allowing users to interact with this contract. *)
 (* amount_per_cycle should use tokens' decimal format *)
@@ -620,6 +630,7 @@ end
 
 transition deposit(amount: Uint128)
   is_unpaused;
+  is_start;
   transfer_zrc2_to_contract init_staking_token_address amount;
   update_stake_map_onchange amount;
   update_staker_bal _sender amount;

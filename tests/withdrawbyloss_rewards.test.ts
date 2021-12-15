@@ -12,6 +12,7 @@ import {
   asyncNoop,
   STAKING_ERROR,
 } from "./config";
+import axios from "axios";
 
 const JEST_WORKER_ID = Number(process.env["JEST_WORKER_ID"]);
 const GENESIS_PRIVATE_KEY = global.GENESIS_PRIVATE_KEYS[JEST_WORKER_ID - 1];
@@ -114,7 +115,7 @@ beforeAll(async () => {
     init_staking_token_address: ["ByStr20", globalToken0ContractAddress],
     blocks_per_cycle: ["Uint256", "10"],
     token_addr: ["ByStr20", globalToken2ContractAddress],
-    token_rewards: ["Uint128", "10000000000000"]
+    token_rewards: ["Uint128", "10000000000000"],
   });
 
   [, contract] = await zilliqa.contracts
@@ -203,6 +204,38 @@ beforeAll(async () => {
   if (!tx6.receipt.success) {
     throw new Error();
   }
+  const res = await axios.post(API, {
+    id: "1",
+    jsonrpc: "2.0",
+    method: "GetBlocknum",
+    params: [""],
+  });
+  const currentBum = Number(res.data.result);
+  const tx7: any = await zilliqa.contracts
+    .at(globalStakingContractAddress)
+    .call(
+      "update_start_block",
+      getJSONParams({
+        block: ["Uint256", currentBum.toString()],
+      }),
+      TX_PARAMS
+    );
+  if (!tx7.receipt.success) {
+    throw new Error();
+  }
+
+  const tx8: any = await zilliqa.contracts
+    .at(globalStakingContractAddress)
+    .call(
+      "update_end_block",
+      getJSONParams({
+        block: ["Uint256", (currentBum + 10000).toString()],
+      }),
+      TX_PARAMS
+    );
+  if (!tx8.receipt.success) {
+    throw new Error();
+  }
 });
 
 describe("staking contract", () => {
@@ -277,7 +310,7 @@ describe("staking contract", () => {
           {
             name: "RewardClaim",
             getParams: () => ({
-              reward_list: ["List (Uint32)", ["1","2","3"]],
+              reward_list: ["List (Uint32)", ["1", "2", "3"]],
             }),
           },
           {
@@ -331,7 +364,8 @@ describe("staking contract", () => {
         ],
         verifyState: (state) => {
           return (
-            JSON.stringify(state.total_stake_per_cycle) === `{"1":"10","2":"10","3":"10","4":"0"}` &&
+            JSON.stringify(state.total_stake_per_cycle) ===
+              `{"1":"10","2":"10","3":"10","4":"0"}` &&
             JSON.stringify(state.total_stake) === `"0"` &&
             JSON.stringify(state.last_cycle) === `"4"` &&
             JSON.stringify(state.stakers_bal) === `{}` &&
