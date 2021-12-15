@@ -54,6 +54,18 @@ let u256_zero = Uint256 0
 let u128_zero = Uint128 0
 let max_rate = Uint128 100000000
 
+
+let adjust_current_blocknum =
+  fun (current_blocknum: Uint256) =>
+  fun (end_block: Uint256) =>
+    let is_current_blocknum_ge_end_block = builtin lt end_block current_blocknum in
+      match is_current_blocknum_ge_end_block with
+      | True =>
+        end_block
+      | False =>
+        current_blocknum
+      end
+
 let one_msg =
   fun (m : Message) =>
     let e = Nil {Message} in
@@ -292,8 +304,10 @@ end
 procedure update_stake_map_onchange(change_amount: Uint128)
   current_bnum <- & BLOCKNUMBER;
   current_block_num = bnum_to_uint256 current_bnum;
+  end_block_local <- end_block;
+  parsed_current_blocknum = adjust_current_blocknum current_block_num end_block_local;
   last_block_num_l <- last_block_num;
-  block_num_diff = builtin sub current_block_num last_block_num_l;
+  block_num_diff = builtin sub parsed_current_blocknum last_block_num_l;
   last_block_num := current_block_num;
   (* if there are 5 cycles need to be updated, then we need update 4 cycles use procedure duplicate_total_stake_map *)
   (* only update the last one upon the change of the stake *)
