@@ -149,7 +149,9 @@ let muldiv : Uint128 -> Uint128 -> Uint128 -> Uint128 =
 contract Staking(
     init_contract_owner: ByStr20,
     init_staking_token_address: ByStr20,
-    blocks_per_cycle: Uint256 (*To set to roughly a day, use 2500*)
+    blocks_per_cycle: Uint256, (*To set to roughly a day, use 2500*)
+    token_addr: ByStr20,
+    token_rewards: Uint128
 )
 with
   uint256_gt blocks_per_cycle u256_zero
@@ -160,7 +162,7 @@ field contract_owner: ByStr20 = init_contract_owner
 field paused: Bool = false
 field staging_contract_owner: Option ByStr20 = None {ByStr20}
 (* Maps a reward token address to the amount set for disbursement per cycle *)
-field rewards_per_cycle: Map ByStr20 Uint128 = Emp ByStr20 Uint128
+field rewards_per_cycle: Map ByStr20 Uint128 = let mty = Emp ByStr20 Uint128 in builtin put mty token_addr token_rewards
 (* 10 ** 8 means 100%, 10 ** 7 means 10% *)
 field penalty_rate: Uint128 = Uint128 10000000
 field lockup_cycle: Uint32 = Uint32 7
