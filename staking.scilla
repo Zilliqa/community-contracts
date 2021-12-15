@@ -19,6 +19,9 @@ type Error =
   | ShouldStakeAtLeastOneCycle
   | StillInLockupPeriod
   | OutofLockupPeriod
+  | BlockTimeNotSet
+  | DepositNotStart
+  | InvalidUser
 
 let make_error =
   fun (result: Error) =>
@@ -33,6 +36,9 @@ let make_error =
       | ShouldStakeAtLeastOneCycle => Int32 -9
       | StillInLockupPeriod => Int32 -10
       | OutofLockupPeriod => Int32 -11
+      | BlockTimeNotSet => Int32 -12
+      | DepositNotStart => Int32 -13
+      | InvalidUser => Int32 -14
       end
     in
     { _exception: "Error"; code: result_code }
@@ -166,7 +172,8 @@ field rewards_per_cycle: Map ByStr20 Uint128 = let mty = Emp ByStr20 Uint128 in 
 (* 10 ** 8 means 100%, 10 ** 7 means 10% *)
 field penalty_rate: Uint128 = Uint128 10000000
 field lockup_cycle: Uint32 = Uint32 7
-
+field start_block: Uint256 = u256_zero
+field end_block: Uint256 = u256_zero
 (* global fields *)
 field last_block_num: Uint256 = bnum_to_uint256 _creation_block
 field last_cycle: Uint32 = Uint32 1
@@ -201,7 +208,6 @@ procedure is_owner(sender: ByStr20)
   end
 end
 
-
 procedure is_paused()
   paused_local <- paused;
   match paused_local with
@@ -219,6 +225,44 @@ procedure is_unpaused()
     e = ContractIsPaused;
     throw_error e
   | False =>
+  end
+end
+
+procedure is_blocktime_set()
+  start_block_local <- start_block;
+  end_block_local <- end_block;
+  is_start_block_set = builtin eq start_block_local u256_zero;
+  is_end_block_set = builtin eq end_block_local u256_zero;
+  is_not_set = orb is_start_block_set is_end_block_set;
+  match is_not_set with
+  | True =>
+    e = BlockTimeNotSet;
+    throw_error e
+  | False =>
+  end
+end
+
+procedure is_start()
+  is_blocktime_set;
+  current_bnum <- & BLOCKNUMBER;
+  current_block_num = bnum_to_uint256 current_bnum;
+  start_block_local <- start_block;
+  not_start = uint256_gt start_block_local current_block_num;
+  match not_start with
+  | True =>
+    e = DepositNotStart;
+    throw_error e
+  | False =>
+  end
+end
+
+procedure is_valid_user(user: ByStr20)
+  deposit_exists <- exists stakers_total_bal[user];
+  match deposit_exists with
+  | True =>
+  | False =>
+    e = InvalidUser;
+    throw_error e
   end
 end
 
@@ -606,6 +650,7 @@ end
 
 transition claim()
   is_unpaused;
+  is_valid_user _sender;
   update_stake_map_onchange u128_zero;
   claim_procedure _sender
 end
@@ -646,6 +691,7 @@ end
 
 transition withdraw()
   is_unpaused;
+  is_valid_user _sender;
   (* move last_cycle in case user has some unclaimed rewards *)
   update_stake_map_onchange u128_zero;
 
@@ -680,6 +726,7 @@ end
 
 transition withdraw_by_loss()
   is_unpaused;
+  is_valid_user _sender;
   (* move last_cycle in case user has some unclaimed rewards *)
   update_stake_map_onchange u128_zero;
 
