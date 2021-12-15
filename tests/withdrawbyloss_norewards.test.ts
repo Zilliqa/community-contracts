@@ -299,9 +299,9 @@ describe("staking contract", () => {
         ],
         verifyState: (state) => {
           return (
-            JSON.stringify(state.total_stake_per_cycle) === `{"1":"0"}` &&
+            JSON.stringify(state.total_stake_per_cycle) === `{"1":"10","2":"10","3":"10","4":"0"}` &&
             JSON.stringify(state.total_stake) === `"0"` &&
-            JSON.stringify(state.last_cycle) === `"1"` &&
+            JSON.stringify(state.last_cycle) === `"4"` &&
             JSON.stringify(state.stakers_bal) === `{}` &&
             JSON.stringify(state.stakers_total_bal) === `{}` &&
             JSON.stringify(state.last_deposit_cycle) === `{}`
