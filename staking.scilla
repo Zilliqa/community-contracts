@@ -187,7 +187,7 @@ field lockup_cycle: Uint32 = Uint32 7
 field start_block: Uint256 = u256_zero
 field end_block: Uint256 = u256_zero
 (* global fields *)
-field last_block_num: Uint256 = bnum_to_uint256 _creation_block
+field last_block_num: Uint256 = u256_zero
 field last_cycle: Uint32 = Uint32 1
 field total_stake: Uint128 = u128_zero
 field total_stake_per_cycle: Map Uint32 Uint128 = Emp Uint32 Uint128
@@ -590,7 +590,8 @@ end
 
 transition update_start_block(block: Uint256)
   is_owner _sender;
-  start_block := block
+  start_block := block;
+  last_block_num := block
 end
 
 transition update_end_block(block: Uint256)
