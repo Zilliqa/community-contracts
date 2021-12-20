@@ -182,7 +182,7 @@ beforeAll(async () => {
   const tx3: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
     .call(
-      "update_token_rewards",
+      "UpdateTokenRewards",
       getJSONParams({
         token_address: ["ByStr20", globalToken1ContractAddress],
         amount_per_cycle: ["Uint128", 10000000000000],
@@ -254,7 +254,7 @@ beforeAll(async () => {
   const tx9: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
     .call(
-      "update_start_block",
+      "UpdateStartBlock",
       getJSONParams({
         block: ["Uint256", currentBum.toString()],
       }),
@@ -268,7 +268,7 @@ beforeAll(async () => {
   const tx10: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
     .call(
-      "update_end_block",
+      "UpdateEndBlock",
       getJSONParams({
         block: ["Uint256", (currentBum + 10000).toString()],
       }),
@@ -283,7 +283,7 @@ describe("staking contract", () => {
   const testCases = [
     {
       name: "deposit from owner",
-      transition: "deposit",
+      transition: "Deposit",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({
         amount: ["Uint128", 10],
@@ -308,7 +308,7 @@ describe("staking contract", () => {
     },
     {
       name: "deposit from alice",
-      transition: "deposit",
+      transition: "Deposit",
       getSender: () => getTestAddr(Alice),
       getParams: () => ({
         amount: ["Uint128", 10],
@@ -327,7 +327,7 @@ describe("staking contract", () => {
     },
     {
       name: "deposit from bob",
-      transition: "deposit",
+      transition: "Deposit",
       getSender: () => getTestAddr(Bob),
       getParams: () => ({
         amount: ["Uint128", 10],
@@ -346,7 +346,7 @@ describe("staking contract", () => {
     },
     {
       name: "check rewards from bob after 1",
-      transition: "check_rewards",
+      transition: "CheckRewards",
       getSender: () => getTestAddr(Bob),
       getParams: () => ({}),
       beforeTransition: async () => {
@@ -356,7 +356,7 @@ describe("staking contract", () => {
       want: {
         events: [
           {
-            name: "check_rewards",
+            name: "CheckRewards",
             getParams: () => ({
               rewards: [
                 "List (Pair (ByStr20) (Uint128))",
@@ -381,7 +381,7 @@ describe("staking contract", () => {
     },
     {
       name: "deposit from bob again",
-      transition: "deposit",
+      transition: "Deposit",
       getSender: () => getTestAddr(Bob),
       getParams: () => ({
         amount: ["Uint128", 10],
@@ -401,7 +401,7 @@ describe("staking contract", () => {
     },
     {
       name: "check rewards from bob after 1",
-      transition: "check_rewards",
+      transition: "CheckRewards",
       getSender: () => getTestAddr(Bob),
       getParams: () => ({}),
       beforeTransition: async () => {
@@ -411,7 +411,7 @@ describe("staking contract", () => {
       want: {
         events: [
           {
-            name: "check_rewards",
+            name: "CheckRewards",
             // cycle 1: owner 10 alice 10 bob 10 => bob's rewards: 3333333333333
             // cycle 2: owner 10 alice 10 bob 20 => bob's rewards: 5000000000000
             getParams: () => ({
@@ -438,7 +438,7 @@ describe("staking contract", () => {
     },
     {
       name: "claim from bob after 1",
-      transition: "claim",
+      transition: "Claim",
       getSender: () => getTestAddr(Bob),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -496,7 +496,7 @@ describe("staking contract", () => {
     },
     {
       name: "withdraw from bob",
-      transition: "withdraw",
+      transition: "Withdraw",
       getSender: () => getTestAddr(Bob),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -504,7 +504,7 @@ describe("staking contract", () => {
     },
     {
       name: "check rewards from alice after 1",
-      transition: "check_rewards",
+      transition: "CheckRewards",
       getSender: () => getTestAddr(Alice),
       getParams: () => ({}),
       beforeTransition: async () => {
@@ -514,7 +514,7 @@ describe("staking contract", () => {
       want: {
         events: [
           {
-            name: "check_rewards",
+            name: "CheckRewards",
             // cycle 1: owner 10 alice 10 bob 10 => alice's rewards: 3333333333333
             // cycle 2: owner 10 alice 10 bob 20 => alice's rewards: 2500000000000
             // cycle 3: owner 10 alice 10 bob 20 => alice's rewards: 2500000000000
@@ -542,7 +542,7 @@ describe("staking contract", () => {
     },
     {
       name: "claim from alice",
-      transition: "claim",
+      transition: "Claim",
       getSender: () => getTestAddr(Alice),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -600,7 +600,7 @@ describe("staking contract", () => {
     },
     {
       name: "claim from owner",
-      transition: "claim",
+      transition: "Claim",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -658,7 +658,7 @@ describe("staking contract", () => {
     },
     {
       name: "withdraw from alice",
-      transition: "withdraw",
+      transition: "Withdraw",
       getSender: () => getTestAddr(Alice),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -666,7 +666,7 @@ describe("staking contract", () => {
     },
     {
       name: "withdraw from owner",
-      transition: "withdraw",
+      transition: "Withdraw",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: asyncNoop,

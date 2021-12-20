@@ -181,7 +181,7 @@ beforeAll(async () => {
   const tx3: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
     .call(
-      "update_start_block",
+      "UpdateStartBlock",
       getJSONParams({
         block: ["Uint256", currentBum.toString()],
       }),
@@ -194,7 +194,7 @@ beforeAll(async () => {
   const tx4: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
     .call(
-      "update_end_block",
+      "UpdateEndBlock",
       getJSONParams({
         block: ["Uint256", (currentBum + 10000).toString()],
       }),
@@ -209,7 +209,7 @@ describe("staking contract", () => {
   const testCases = [
     {
       name: "unpause",
-      transition: "unpause",
+      transition: "Unpause",
       getSender: () => getTestAddr(OWNER),
       beforeTransition: asyncNoop,
       error: undefined,
@@ -226,7 +226,7 @@ describe("staking contract", () => {
     },
     {
       name: "deposit once",
-      transition: "deposit",
+      transition: "Deposit",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({
         amount: ["Uint128", 10],
@@ -251,7 +251,7 @@ describe("staking contract", () => {
     },
     {
       name: "deposit multiple times before next cycle",
-      transition: "deposit",
+      transition: "Deposit",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({
         amount: ["Uint128", 10],
@@ -278,7 +278,7 @@ describe("staking contract", () => {
     },
     {
       name: "deposit multiple times crross next cycle",
-      transition: "deposit",
+      transition: "Deposit",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({
         amount: ["Uint128", 10],
@@ -308,7 +308,7 @@ describe("staking contract", () => {
     },
     {
       name: "cross multiple cycle",
-      transition: "deposit",
+      transition: "Deposit",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({
         amount: ["Uint128", 10],

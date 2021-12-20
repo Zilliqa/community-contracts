@@ -173,7 +173,7 @@ beforeAll(async () => {
   const tx3: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
     .call(
-      "update_token_rewards",
+      "UpdateTokenRewards",
       getJSONParams({
         token_address: ["ByStr20", globalToken1ContractAddress],
         amount_per_cycle: ["Uint128", 10000000000000],
@@ -213,7 +213,7 @@ describe("staking contract", () => {
   const testCases = [
     {
       name: "withdraw without depositing",
-      transition: "withdraw",
+      transition: "Withdraw",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -221,7 +221,7 @@ describe("staking contract", () => {
     },
     {
       name: "withdraw by loss without depositing",
-      transition: "withdraw_by_loss",
+      transition: "WithdrawByLoss",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -229,7 +229,7 @@ describe("staking contract", () => {
     },
     {
       name: "claim without depositing",
-      transition: "claim",
+      transition: "Claim",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: asyncNoop,

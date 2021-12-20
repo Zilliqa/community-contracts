@@ -172,7 +172,7 @@ beforeAll(async () => {
   const tx3: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
     .call(
-      "update_token_rewards",
+      "UpdateTokenRewards",
       getJSONParams({
         token_address: ["ByStr20", globalToken1ContractAddress],
         amount_per_cycle: ["Uint128", 10000000000000],
@@ -217,7 +217,7 @@ beforeAll(async () => {
   const tx7: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
     .call(
-      "update_start_block",
+      "UpdateStartBlock",
       getJSONParams({
         block: ["Uint256", currentBum.toString()],
       }),
@@ -230,7 +230,7 @@ beforeAll(async () => {
   const tx8: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
     .call(
-      "update_end_block",
+      "UpdateEndBlock",
       getJSONParams({
         block: ["Uint256", (currentBum + 10000).toString()],
       }),
@@ -245,7 +245,7 @@ describe("staking contract", () => {
   const testCases = [
     {
       name: "deposit once",
-      transition: "deposit",
+      transition: "Deposit",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({
         amount: ["Uint128", 10],
@@ -270,7 +270,7 @@ describe("staking contract", () => {
     },
     {
       name: "check rewards on current cycle",
-      transition: "check_rewards",
+      transition: "CheckRewards",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -278,7 +278,7 @@ describe("staking contract", () => {
       want: {
         events: [
           {
-            name: "check_rewards",
+            name: "CheckRewards",
             getParams: () => ({
               rewards: ["List (Pair (ByStr20) (Uint128))", []],
             }),
@@ -301,7 +301,7 @@ describe("staking contract", () => {
     },
     {
       name: "claim on current cycle",
-      transition: "claim",
+      transition: "Claim",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -332,7 +332,7 @@ describe("staking contract", () => {
     },
     {
       name: "check rewards on next cycle",
-      transition: "check_rewards",
+      transition: "CheckRewards",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: async () => {
@@ -342,7 +342,7 @@ describe("staking contract", () => {
       want: {
         events: [
           {
-            name: "check_rewards",
+            name: "CheckRewards",
             getParams: () => ({
               rewards: [
                 "List (Pair (ByStr20) (Uint128))",
@@ -373,7 +373,7 @@ describe("staking contract", () => {
     },
     {
       name: "claim on next cycle",
-      transition: "claim",
+      transition: "Claim",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -438,7 +438,7 @@ describe("staking contract", () => {
     },
     {
       name: "check rewards on next cycle again",
-      transition: "check_rewards",
+      transition: "CheckRewards",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -446,7 +446,7 @@ describe("staking contract", () => {
       want: {
         events: [
           {
-            name: "check_rewards",
+            name: "CheckRewards",
             getParams: () => ({
               rewards: ["List (Pair (ByStr20) (Uint128))", []],
             }),
@@ -470,7 +470,7 @@ describe("staking contract", () => {
     },
     {
       name: "claim on next cycle again",
-      transition: "claim",
+      transition: "Claim",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -502,7 +502,7 @@ describe("staking contract", () => {
     },
     {
       name: "check rewards on next 4 cycle",
-      transition: "check_rewards",
+      transition: "CheckRewards",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: async () => {
@@ -512,7 +512,7 @@ describe("staking contract", () => {
       want: {
         events: [
           {
-            name: "check_rewards",
+            name: "CheckRewards",
             getParams: () => ({
               rewards: [
                 "List (Pair (ByStr20) (Uint128))",
@@ -543,7 +543,7 @@ describe("staking contract", () => {
     },
     {
       name: "claim on next 4 cycle",
-      transition: "claim",
+      transition: "Claim",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: asyncNoop,

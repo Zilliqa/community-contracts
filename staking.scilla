@@ -563,7 +563,7 @@ end
 (*              Housekeeping transitions           *)
 (***************************************************)
 
-transition update_owner(new_owner: ByStr20)
+transition UpdateOwner(new_owner: ByStr20)
   RequireOwner _sender;
   new_staging_owner = Some {ByStr20} new_owner;
   staging_contract_owner := new_staging_owner;
@@ -571,7 +571,7 @@ transition update_owner(new_owner: ByStr20)
   event e
 end
 
-transition claim_owner()
+transition ClaimOwner()
   staging_owner_opt <- staging_contract_owner;
   match staging_owner_opt with
   | Some staging_owner =>
@@ -593,27 +593,27 @@ transition claim_owner()
   end
 end
 
-transition pause()
+transition Pause()
   RequireOwner _sender;
   paused := true;
   e = { _eventname: "Paused" };
   event e
 end
 
-transition unpause()
+transition Unpause()
   RequireOwner _sender;
   paused := false;
   e = { _eventname: "Unpaused" };
   event e
 end
 
-transition update_start_block(block: Uint256)
+transition UpdateStartBlock(block: Uint256)
   RequireOwner _sender;
   start_block := block;
   last_block_num := block
 end
 
-transition update_end_block(block: Uint256)
+transition UpdateEndBlock(block: Uint256)
   RequireOwner _sender;
   end_block := block
 end
@@ -621,21 +621,21 @@ end
 (* The next two transitions allow to initiate the reward pool *)
 (* Should be used carefully, and ideally right after the deployment and before allowing users to interact with this contract. *)
 (* amount_per_cycle should use tokens' decimal format *)
-transition update_token_rewards(token_address: ByStr20, amount_per_cycle: Uint128)
+transition UpdateTokenRewards(token_address: ByStr20, amount_per_cycle: Uint128)
   RequireOwner _sender;
   rewards_per_cycle[token_address] := amount_per_cycle;
   e = { _eventname: "UpdateTokenRewards"; token: token_address; amount_per_cycle: amount_per_cycle };
   event e
 end
 
-transition remove_token_rewards(token_address: ByStr20)
+transition RemoveTokenRewards(token_address: ByStr20)
   RequireOwner _sender;
   delete rewards_per_cycle[token_address];
   e = { _eventname: "RemoveTokenRewards"; token: token_address };
   event e
 end
 
-transition update_penalty_rate(new_rate: Uint128)
+transition UpdatePenaltyRate(new_rate: Uint128)
   RequireOwner _sender;
   new_penalty_rate_gt_zero = uint128_gt new_rate u128_zero;
   new_penalty_rate_le_max = uint128_le new_rate max_rate;
@@ -651,7 +651,7 @@ transition update_penalty_rate(new_rate: Uint128)
   end
 end
 
-transition update_lockup_cycle(new_lockup_cycle: Uint32)
+transition UpdateLockupCycle(new_lockup_cycle: Uint32)
   RequireOwner _sender;
   lockup_cycle := new_lockup_cycle;
   e = { _eventname: "UpdateLockup"; new_lockup_cycle: new_lockup_cycle};
@@ -662,7 +662,7 @@ end
 (*           Staking related transitions           *)
 (***************************************************)
 
-transition deposit(amount: Uint128)
+transition Deposit(amount: Uint128)
   RequireNotPaused;
   RequireStarted;
   RequireNotEnded;
@@ -676,7 +676,7 @@ transition deposit(amount: Uint128)
 end
 
 
-procedure claim_procedure(user: ByStr20)
+procedure ClaimProcedure(user: ByStr20)
   last_withdraw_cycle_opt <- last_withdraw_cycle[user];
   last_withdraw_cycle_int = get_uint32_opt last_withdraw_cycle_opt;
   last_cycle_local <- last_cycle;
@@ -694,14 +694,14 @@ procedure claim_procedure(user: ByStr20)
 end
 
 
-transition claim()
+transition Claim()
   RequireNotPaused;
   RequireValidUser _sender;
   UpdateStakeMapOnchange u128_zero;
-  claim_procedure _sender
+  ClaimProcedure _sender
 end
 
-transition check_rewards()
+transition CheckRewards()
   RequireNotPaused;
   UpdateStakeMapOnchange u128_zero;
   user = _sender;
@@ -726,7 +726,7 @@ transition check_rewards()
 
   aggregate_rewards_map <- aggregate_rewards_tmp;
   aggregate_rewards_list = builtin to_list aggregate_rewards_map;
-  e = { _eventname: "check_rewards"; rewards: aggregate_rewards_list };
+  e = { _eventname: "CheckRewards"; rewards: aggregate_rewards_list };
   event e;
 
   (* clean up stakers_stake_per_cycle_tmp *)
@@ -735,13 +735,13 @@ transition check_rewards()
   (* don't update anything after this *)
 end
 
-transition withdraw()
+transition Withdraw()
   RequireNotPaused;
   RequireValidUser _sender;
   (* move last_cycle in case user has some unclaimed rewards *)
   UpdateStakeMapOnchange u128_zero;
 
-  claim_procedure _sender;
+  ClaimProcedure _sender;
 
   (* get original stake amount *)
   stake_amount_opt <- stakers_total_bal[_sender];
@@ -770,13 +770,13 @@ transition withdraw()
 
 end
 
-transition withdraw_by_loss()
+transition WithdrawByLoss()
   RequireNotPaused;
   RequireValidUser _sender;
   (* move last_cycle in case user has some unclaimed rewards *)
   UpdateStakeMapOnchange u128_zero;
 
-  claim_procedure _sender;
+  ClaimProcedure _sender;
 
   (* get original stake amount *)
   stake_amount_opt <- stakers_total_bal[_sender];
@@ -807,7 +807,7 @@ transition withdraw_by_loss()
 
 end
 
-transition withdraw_penalty()
+transition WithdrawPenalty()
   RequireOwner _sender;
   transfer_amount <- aggregated_penalty_amount;
   aggregated_penalty_amount := u128_zero;
@@ -816,7 +816,7 @@ transition withdraw_penalty()
   TransferZRC2FromContract init_staking_token_address _sender transfer_amount
 end
 
-transition emergency_withdraw(token_address: ByStr20, amount: Uint128)
+transition EmergencyWithdraw(token_address: ByStr20, amount: Uint128)
   RequirePaused;
   RequireOwner _sender;
   e = { _eventname: "EmergencyWithdraw"; token: token_address; amount: amount};

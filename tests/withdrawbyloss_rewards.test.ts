@@ -174,7 +174,7 @@ beforeAll(async () => {
   const tx3: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
     .call(
-      "update_token_rewards",
+      "UpdateTokenRewards",
       getJSONParams({
         token_address: ["ByStr20", globalToken1ContractAddress],
         amount_per_cycle: ["Uint128", 10000000000000],
@@ -218,7 +218,7 @@ beforeAll(async () => {
   const tx7: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
     .call(
-      "update_start_block",
+      "UpdateStartBlock",
       getJSONParams({
         block: ["Uint256", currentBum.toString()],
       }),
@@ -231,7 +231,7 @@ beforeAll(async () => {
   const tx8: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
     .call(
-      "update_end_block",
+      "UpdateEndBlock",
       getJSONParams({
         block: ["Uint256", (currentBum + 10000).toString()],
       }),
@@ -246,7 +246,7 @@ describe("staking contract", () => {
   const testCases = [
     {
       name: "deposit once",
-      transition: "deposit",
+      transition: "Deposit",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({
         amount: ["Uint128", 10],
@@ -271,7 +271,7 @@ describe("staking contract", () => {
     },
     {
       name: "withdraw on current cycle",
-      transition: "withdraw",
+      transition: "Withdraw",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -294,7 +294,7 @@ describe("staking contract", () => {
     },
     {
       name: "withdraw with rewards",
-      transition: "withdraw_by_loss",
+      transition: "WithdrawByLoss",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: async () => {
