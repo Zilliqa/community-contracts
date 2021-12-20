@@ -58,7 +58,7 @@ export const FAUCET_PARAMS = {
 export const STAKING_ERROR = {
   StillInLockupPeriod: -10,
   OutofLockupPeriod: -11,
-  InvalidUser: -14,
+  InvalidUser: -15,
 };
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
