@@ -116,6 +116,10 @@ beforeAll(async () => {
     blocks_per_cycle: ["Uint256", "10"],
     token_addr: ["ByStr20", globalToken2ContractAddress],
     token_rewards: ["Uint128", "10000000000000"],
+    init_start_block: ["Uint256", 0],
+    init_end_block: ["Uint256", 0],
+    init_penalty_rate: ["Uint128", 10000000],
+    init_lockup_cycle: ["Uint32", 7]
   });
 
   [, contract] = await zilliqa.contracts

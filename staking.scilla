@@ -171,7 +171,11 @@ contract Staking(
     init_staking_token_address: ByStr20,
     blocks_per_cycle: Uint256, (*To set to roughly a day, use 2500*)
     token_addr: ByStr20,
-    token_rewards: Uint128
+    token_rewards: Uint128,
+    init_start_block: Uint256,
+    init_end_block: Uint256,
+    init_penalty_rate: Uint128,
+    init_lockup_cycle: Uint32
 )
 with
   uint256_gt blocks_per_cycle u256_zero
@@ -184,10 +188,10 @@ field staging_contract_owner: Option ByStr20 = None {ByStr20}
 (* Maps a reward token address to the amount set for disbursement per cycle *)
 field rewards_per_cycle: Map ByStr20 Uint128 = let mty = Emp ByStr20 Uint128 in builtin put mty token_addr token_rewards
 (* 10 ** 8 means 100%, 10 ** 7 means 10% *)
-field penalty_rate: Uint128 = Uint128 10000000
-field lockup_cycle: Uint32 = Uint32 7
-field start_block: Uint256 = u256_zero
-field end_block: Uint256 = u256_zero
+field penalty_rate: Uint128 = init_penalty_rate
+field lockup_cycle: Uint32 = init_lockup_cycle
+field start_block: Uint256 = init_start_block
+field end_block: Uint256 = init_end_block
 (* global fields *)
 field last_block_num: Uint256 = u256_zero
 field last_cycle: Uint32 = Uint32 1
