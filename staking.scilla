@@ -16,10 +16,13 @@ type Error =
   | ContractIsNotPaused
   | ContractIsPaused
   | InvalidPenaltyRate
-  | UserHasUnclaimedReward
   | ShouldStakeAtLeastOneCycle
   | StillInLockupPeriod
   | OutofLockupPeriod
+  | BlockTimeNotSet
+  | DepositNotStart
+  | DepositEnded
+  | InvalidUser
 
 let make_error =
   fun (result: Error) =>
@@ -31,10 +34,13 @@ let make_error =
       | ContractIsNotPaused => Int32 -4
       | ContractIsPaused => Int32 -5
       | InvalidPenaltyRate => Int32 -6
-      | UserHasUnclaimedReward => Int32 -7
-      | ShouldStakeAtLeastOneCycle => Int32 -8
-      | StillInLockupPeriod => Int32 -9
-      | OutofLockupPeriod => Int32 -10
+      | ShouldStakeAtLeastOneCycle => Int32 -9
+      | StillInLockupPeriod => Int32 -10
+      | OutofLockupPeriod => Int32 -11
+      | BlockTimeNotSet => Int32 -12
+      | DepositNotStart => Int32 -13
+      | DepositEnded => Int32 -14
+      | InvalidUser => Int32 -15
       end
     in
     { _exception: "Error"; code: result_code }
@@ -49,6 +55,18 @@ let uint32_one = Uint32 1
 let u256_zero = Uint256 0
 let u128_zero = Uint128 0
 let max_rate = Uint128 100000000
+
+
+let adjust_current_blocknum =
+  fun (current_blocknum: Uint256) =>
+  fun (end_block: Uint256) =>
+    let is_current_blocknum_ge_end_block = builtin lt end_block current_blocknum in
+      match is_current_blocknum_ge_end_block with
+      | True =>
+        end_block
+      | False =>
+        current_blocknum
+      end
 
 let one_msg =
   fun (m : Message) =>
@@ -151,7 +169,13 @@ let muldiv : Uint128 -> Uint128 -> Uint128 -> Uint128 =
 contract Staking(
     init_contract_owner: ByStr20,
     init_staking_token_address: ByStr20,
-    blocks_per_cycle: Uint256 (*To set to roughly a day, use 2500*)
+    blocks_per_cycle: Uint256, (*To set to roughly a day, use 2500*)
+    token_addr: ByStr20,
+    token_rewards: Uint128,
+    init_start_block: Uint256,
+    init_end_block: Uint256,
+    init_penalty_rate: Uint128,
+    init_lockup_cycle: Uint32
 )
 with
   uint256_gt blocks_per_cycle u256_zero
@@ -162,13 +186,14 @@ field contract_owner: ByStr20 = init_contract_owner
 field paused: Bool = false
 field staging_contract_owner: Option ByStr20 = None {ByStr20}
 (* Maps a reward token address to the amount set for disbursement per cycle *)
-field rewards_per_cycle: Map ByStr20 Uint128 = Emp ByStr20 Uint128
+field rewards_per_cycle: Map ByStr20 Uint128 = let mty = Emp ByStr20 Uint128 in builtin put mty token_addr token_rewards
 (* 10 ** 8 means 100%, 10 ** 7 means 10% *)
-field penalty_rate: Uint128 = Uint128 10000000
-field lockup_cycle: Uint32 = Uint32 7
-
+field penalty_rate: Uint128 = init_penalty_rate
+field lockup_cycle: Uint32 = init_lockup_cycle
+field start_block: Uint256 = init_start_block
+field end_block: Uint256 = init_end_block
 (* global fields *)
-field last_block_num: Uint256 = bnum_to_uint256 _creation_block
+field last_block_num: Uint256 = u256_zero
 field last_cycle: Uint32 = Uint32 1
 field total_stake: Uint128 = u128_zero
 field total_stake_per_cycle: Map Uint32 Uint128 = Emp Uint32 Uint128
@@ -185,44 +210,94 @@ field last_withdraw_cycle: Map ByStr20 Uint32 = Emp ByStr20 Uint32
 field aggregate_rewards_tmp: Map ByStr20 Uint128 = Emp ByStr20 Uint128
 field stakers_stake_per_cycle_tmp: Map ByStr20 (Map Uint32 Uint128) = Emp ByStr20 (Map Uint32 Uint128)
 
-procedure throw_error(err: Error)
+procedure ThrowError(err: Error)
   e = make_error err;
   throw e
 end
 
-procedure is_owner(sender: ByStr20)
+procedure RequireOwner(sender: ByStr20)
   owner <- contract_owner;
   is_owner = builtin eq sender owner;
   match is_owner with
   | True =>
   | False =>
     e = SenderIsNotOwner;
-    throw_error e
+    ThrowError e
   end
 end
 
-
-procedure is_paused()
+procedure RequirePaused()
   paused_local <- paused;
   match paused_local with
   | True =>
   | False =>
     e = ContractIsNotPaused;
-    throw_error e
+    ThrowError e
   end
 end
 
-procedure is_unpaused()
+procedure RequireNotPaused()
   paused_local <- paused;
   match paused_local with
   | True =>
     e = ContractIsPaused;
-    throw_error e
+    ThrowError e
   | False =>
   end
 end
 
-procedure transfer_zrc2_to_contract(assetHash: ByStr20, amount: Uint128)
+procedure RequireBlocktimeSet()
+  start_block_local <- start_block;
+  end_block_local <- end_block;
+  is_start_block_set = builtin eq start_block_local u256_zero;
+  is_end_block_set = builtin eq end_block_local u256_zero;
+  is_not_set = orb is_start_block_set is_end_block_set;
+  match is_not_set with
+  | True =>
+    e = BlockTimeNotSet;
+    ThrowError e
+  | False =>
+  end
+end
+
+procedure RequireStarted()
+  RequireBlocktimeSet;
+  current_bnum <- & BLOCKNUMBER;
+  current_block_num = bnum_to_uint256 current_bnum;
+  start_block_local <- start_block;
+  not_start = uint256_gt start_block_local current_block_num;
+  match not_start with
+  | True =>
+    e = DepositNotStart;
+    ThrowError e
+  | False =>
+  end
+end
+
+procedure RequireNotEnded()
+  current_bnum <- & BLOCKNUMBER;
+  end_block_local <- end_block;
+  current_block_num = bnum_to_uint256 current_bnum;
+  is_end = uint256_gt current_block_num end_block_local;
+  match is_end with
+  | True =>
+    e = DepositEnded;
+    ThrowError e
+  | False =>
+  end
+end
+
+procedure RequireValidUser(user: ByStr20)
+  deposit_exists <- exists stakers_total_bal[user];
+  match deposit_exists with
+  | True =>
+  | False =>
+    e = InvalidUser;
+    ThrowError e
+  end
+end
+
+procedure TransferZRC2ToContract(assetHash: ByStr20, amount: Uint128)
   msg_to_zrc2 = {_tag: "TransferFrom"; _recipient: assetHash; _amount: u128_zero;
                   from: _sender; to: _this_address; amount: amount};
   msgs = one_msg msg_to_zrc2;
@@ -231,33 +306,35 @@ procedure transfer_zrc2_to_contract(assetHash: ByStr20, amount: Uint128)
   event e
 end
 
-procedure transfer_zrc2_from_contract(assetHash: ByStr20, address: ByStr20, amount: Uint128)
+procedure TransferZRC2FromContract(assetHash: ByStr20, address: ByStr20, amount: Uint128)
   msg_to_zrc2 = {_tag: "Transfer"; _recipient: assetHash; _amount: u128_zero;
                  to: address; amount: amount};
   msgs = one_msg msg_to_zrc2;
   send msgs
 end
 
-procedure duplicate_total_stake_map(cycle_to_increase: Uint32)
+procedure DuplicateTotalStakeMap(cycle_to_increase: Uint32)
   last_cycle_local <- last_cycle;
   total_stake_local <- total_stake;
   current_cycle = builtin add last_cycle_local cycle_to_increase;
   total_stake_per_cycle[current_cycle] := total_stake_local
 end
 
-procedure update_stake_map_onchange(change_amount: Uint128)
+procedure UpdateStakeMapOnchange(change_amount: Uint128)
   current_bnum <- & BLOCKNUMBER;
   current_block_num = bnum_to_uint256 current_bnum;
+  end_block_local <- end_block;
+  parsed_current_blocknum = adjust_current_blocknum current_block_num end_block_local;
   last_block_num_l <- last_block_num;
-  block_num_diff = builtin sub current_block_num last_block_num_l;
+  block_num_diff = builtin sub parsed_current_blocknum last_block_num_l;
   last_block_num := current_block_num;
-  (* if there are 5 cycles need to be updated, then we need update 4 cycles use procedure duplicate_total_stake_map *)
+  (* if there are 5 cycles need to be updated, then we need update 4 cycles use procedure DuplicateTotalStakeMap *)
   (* only update the last one upon the change of the stake *)
   cycle_to_increase = builtin div block_num_diff blocks_per_cycle;
   cycle_to_increase_32 = u256_to_u32 cycle_to_increase;
   (* this will create [1,2,3,4] if cycle_to_increase_u32 is 5 *)
   duplicated_list = iota uint32_one cycle_to_increase_32;
-  forall duplicated_list duplicate_total_stake_map;
+  forall duplicated_list DuplicateTotalStakeMap;
   (* handle the last cycle, last cycle is not calculated for rewards *)
   current_total_stake <- total_stake;
   last_cycle_local <- last_cycle;
@@ -269,7 +346,7 @@ procedure update_stake_map_onchange(change_amount: Uint128)
   last_cycle := the_last_cycle
 end
 
-procedure update_staker_bal(user: ByStr20, amount: Uint128)
+procedure UpdateStakerBal(user: ByStr20, amount: Uint128)
   last_cycle_local <- last_cycle;
   staker_bal_opt <- stakers_bal[user][last_cycle_local];
   new_amount = match staker_bal_opt with
@@ -290,16 +367,16 @@ procedure update_staker_bal(user: ByStr20, amount: Uint128)
   stakers_total_bal[user] := new_total_bal
 end
 
-procedure update_last_deposit_map(user: ByStr20)
+procedure UpdateLastDepositMap(user: ByStr20)
   last_cycle_local <- last_cycle;
   last_deposit_cycle[user] := last_cycle_local
 end
 
-procedure clean_map_procedure(token_addr: ByStr20)
+procedure CleanMapProcedure(token_addr: ByStr20)
   delete aggregate_rewards_tmp[token_addr]
 end
 
-procedure clean_rewards_distribution()
+procedure CleanRewardsDistribution()
    aggregate_rewards_tmp_local <- aggregate_rewards_tmp;
    (* List (Pair ByStr20 Uint128)*)
    aggregate_rewards_tmp_list = builtin to_list aggregate_rewards_tmp_local;
@@ -309,10 +386,10 @@ procedure clean_rewards_distribution()
      | Pair token_address amount => token_address
      end;
    token_list = mapper f aggregate_rewards_tmp_list;
-   forall token_list clean_map_procedure
+   forall token_list CleanMapProcedure
 end
 
-procedure increase_rewards_tmp(token_address: ByStr20, amount: Uint128)
+procedure IncreaseRewardsTmp(token_address: ByStr20, amount: Uint128)
   aggregate_rewards_opt <- aggregate_rewards_tmp[token_address];
   amount_added = match aggregate_rewards_opt with
                     | Some aggregate_rewards =>
@@ -323,28 +400,28 @@ procedure increase_rewards_tmp(token_address: ByStr20, amount: Uint128)
 end
 
 
-procedure setup_rewards_distribution(p: RewardsCalculation)
+procedure SetupRewardsDistribution(p: RewardsCalculation)
   match p with
   | RewardsCalculation token_address rewarding_amount user_stake total_stake_amount =>
     reward = muldiv rewarding_amount user_stake total_stake_amount;
-    increase_rewards_tmp token_address reward
+    IncreaseRewardsTmp token_address reward
   end
 end
 
-procedure send_rewards(pair: Pair ByStr20 Uint128)
+procedure SendRewards(pair: Pair ByStr20 Uint128)
   match pair with
   | Pair token_address amount =>
-    transfer_zrc2_from_contract token_address _sender amount
+    TransferZRC2FromContract token_address _sender amount
   end
 end
 
-procedure send_rewards_distribution()
+procedure SendRewardsDistribution()
   aggregate_rewards_map <- aggregate_rewards_tmp;
   aggregate_rewards_list = builtin to_list aggregate_rewards_map;
-  forall aggregate_rewards_list send_rewards
+  forall aggregate_rewards_list SendRewards
 end
 
-procedure set_rewards_distribution(user_stake_this_cycle: Uint128, total_stake_amount: Uint128)
+procedure SetRewardsDistribution(user_stake_this_cycle: Uint128, total_stake_amount: Uint128)
   rewards_per_cycle_local <- rewards_per_cycle;
   (* List (Pair ByStr20 Uint128)*)
   rewards_per_cycle_list = builtin to_list rewards_per_cycle_local;
@@ -355,10 +432,10 @@ procedure set_rewards_distribution(user_stake_this_cycle: Uint128, total_stake_a
       RewardsCalculation token_address amount user_stake_this_cycle total_stake_amount
     end;
   distribution_list = mapper f rewards_per_cycle_list;
-  forall distribution_list setup_rewards_distribution
+  forall distribution_list SetupRewardsDistribution
 end
 
-procedure calculate_rewards(cycle: Uint32)
+procedure CalculateRewards(cycle: Uint32)
   last_reward_cycle = builtin sub cycle uint32_one;
   last_staker_bal_opt <- stakers_stake_per_cycle[_sender][last_reward_cycle];
   last_staker_bal = get_uint128_opt last_staker_bal_opt;
@@ -380,21 +457,21 @@ procedure calculate_rewards(cycle: Uint32)
     match is_total_stake_zero with
     | True =>
     | False =>
-      set_rewards_distribution user_stake_this_cycle total_stake_amount
+      SetRewardsDistribution user_stake_this_cycle total_stake_amount
     end
   | None =>
   end
 end
 
-procedure setup_rewards_distribution_tmp(p: RewardsCalculation)
+procedure SetupRewardsDistributionTmp(p: RewardsCalculation)
   match p with
   | RewardsCalculation token_address rewarding_amount user_stake total_stake_amount =>
     reward = muldiv rewarding_amount user_stake total_stake_amount;
-    increase_rewards_tmp token_address reward
+    IncreaseRewardsTmp token_address reward
   end
 end
 
-procedure set_rewards_distribution_tmp(user_stake_this_cycle: Uint128, total_stake_amount: Uint128)
+procedure SetRewardsDistributionTmp(user_stake_this_cycle: Uint128, total_stake_amount: Uint128)
   rewards_per_cycle_local <- rewards_per_cycle;
   (* List (Pair ByStr20 Uint128)*)
   rewards_per_cycle_list = builtin to_list rewards_per_cycle_local;
@@ -405,10 +482,10 @@ procedure set_rewards_distribution_tmp(user_stake_this_cycle: Uint128, total_sta
       RewardsCalculation token_address amount user_stake_this_cycle total_stake_amount
     end;
   distribution_list = mapper f rewards_per_cycle_list;
-  forall distribution_list setup_rewards_distribution_tmp
+  forall distribution_list SetupRewardsDistributionTmp
 end
 
-procedure calculate_rewards_tmp_inner(user: ByStr20, cycle: Uint32)
+procedure CalculateRewardsTmpInner(user: ByStr20, cycle: Uint32)
   last_reward_cycle = builtin sub cycle uint32_one;
   last_staker_bal_opt <- stakers_stake_per_cycle_tmp[user][last_reward_cycle];
   last_staker_bal = get_uint128_opt last_staker_bal_opt;
@@ -426,49 +503,36 @@ procedure calculate_rewards_tmp_inner(user: ByStr20, cycle: Uint32)
   total_stake_per_opt <- total_stake_per_cycle[cycle];
   match total_stake_per_opt with
   | Some total_stake_amount =>
-    e = { _eventname: "calculate_rewards_tmp_inner"; cycle: cycle; total_stake: total_stake_amount; user_stake_this_cycle: user_stake_this_cycle };
+    e = { _eventname: "CalculateRewardsTmpInner"; cycle: cycle; total_stake: total_stake_amount; user_stake_this_cycle: user_stake_this_cycle };
     event e;
     is_total_stake_zero = builtin eq u128_zero total_stake_amount;
     match is_total_stake_zero with
     | True =>
     | False =>
-      set_rewards_distribution_tmp user_stake_this_cycle total_stake_amount
+      SetRewardsDistributionTmp user_stake_this_cycle total_stake_amount
     end
   | None =>
   end
 end
 
-procedure calculate_rewards_tmp(arg: UserAndCycle)
+procedure CalculateRewardsTmp(arg: UserAndCycle)
  match arg with
  | UserAndCycle user cycle =>
-   calculate_rewards_tmp_inner user cycle
+   CalculateRewardsTmpInner user cycle
  end
 end
 
-procedure update_stakers_stake_per_cycle_tmp(init_cycle: Uint32, user: ByStr20)
+procedure UpdateStakersStakePerCycleTmp(init_cycle: Uint32, user: ByStr20)
   amount_opt <- stakers_stake_per_cycle[user][init_cycle];
   amt = get_uint128_opt amount_opt;
   stakers_stake_per_cycle_tmp[user][init_cycle] := amt
 end
 
-procedure clean_stakers_stake_per_cycle_tmp(user: ByStr20)
+procedure CleanStakersStakePerCycleTmp(user: ByStr20)
   delete stakers_stake_per_cycle_tmp[user]
 end
 
-procedure check_unclaimed_rewards(last_withdraw_cycle_int: Uint32)
-  last_cycle_local <- last_cycle;
-  (* last_withdraw_cycle_int + 1 should == last_cycle_local *)
-  last_withdraw_cycle_plus_one = builtin add last_withdraw_cycle_int uint32_one;
-  is_equal = builtin eq last_withdraw_cycle_plus_one last_cycle_local;
-  match is_equal with
-  | True =>
-  | False =>
-    e = UserHasUnclaimedReward;
-    throw_error e
-  end
-end
-
-procedure clean_user_data(user: ByStr20)
+procedure CleanUserData(user: ByStr20)
   delete stakers_bal[user];
   delete stakers_stake_per_cycle[user];
   delete last_deposit_cycle[user];
@@ -476,7 +540,7 @@ procedure clean_user_data(user: ByStr20)
   delete stakers_total_bal[user]
 end
 
-procedure decrease_stake(amount: Uint128)
+procedure DecreaseStake(amount: Uint128)
   total_stake_local <- total_stake;
   new_total_stake_local = builtin sub total_stake_local amount;
   total_stake := new_total_stake_local;
@@ -484,7 +548,7 @@ procedure decrease_stake(amount: Uint128)
   total_stake_per_cycle[last_cycle_local] := new_total_stake_local
 end
 
-procedure increase_aggregated_penalty_amount(amount: Uint128)
+procedure IncreaseAggregatedPenaltyAmount(amount: Uint128)
   is_zero = builtin eq amount u128_zero;
   match is_zero with
   | True =>
@@ -499,15 +563,15 @@ end
 (*              Housekeeping transitions           *)
 (***************************************************)
 
-transition update_owner(new_owner: ByStr20)
-  is_owner _sender;
+transition UpdateOwner(new_owner: ByStr20)
+  RequireOwner _sender;
   new_staging_owner = Some {ByStr20} new_owner;
   staging_contract_owner := new_staging_owner;
   e = { _eventname: "NewStagingOwner"; new_staging_owner: new_owner };
   event e
 end
 
-transition claim_owner()
+transition ClaimOwner()
   staging_owner_opt <- staging_contract_owner;
   match staging_owner_opt with
   | Some staging_owner =>
@@ -521,47 +585,58 @@ transition claim_owner()
       event e
     | False =>
       e = StagingAdminValidationFailed;
-      throw_error e
+      ThrowError e
     end
   | None =>
     e = StagingOwnerNotExist;
-    throw_error e
+    ThrowError e
   end
 end
 
-transition pause()
-  is_owner _sender;
+transition Pause()
+  RequireOwner _sender;
   paused := true;
   e = { _eventname: "Paused" };
   event e
 end
 
-transition unpause()
-  is_owner _sender;
+transition Unpause()
+  RequireOwner _sender;
   paused := false;
   e = { _eventname: "Unpaused" };
   event e
 end
 
+transition UpdateStartBlock(block: Uint256)
+  RequireOwner _sender;
+  start_block := block;
+  last_block_num := block
+end
+
+transition UpdateEndBlock(block: Uint256)
+  RequireOwner _sender;
+  end_block := block
+end
+
 (* The next two transitions allow to initiate the reward pool *)
 (* Should be used carefully, and ideally right after the deployment and before allowing users to interact with this contract. *)
 (* amount_per_cycle should use tokens' decimal format *)
-transition update_token_rewards(token_address: ByStr20, amount_per_cycle: Uint128)
-  is_owner _sender;
+transition UpdateTokenRewards(token_address: ByStr20, amount_per_cycle: Uint128)
+  RequireOwner _sender;
   rewards_per_cycle[token_address] := amount_per_cycle;
   e = { _eventname: "UpdateTokenRewards"; token: token_address; amount_per_cycle: amount_per_cycle };
   event e
 end
 
-transition remove_token_rewards(token_address: ByStr20)
-  is_owner _sender;
+transition RemoveTokenRewards(token_address: ByStr20)
+  RequireOwner _sender;
   delete rewards_per_cycle[token_address];
   e = { _eventname: "RemoveTokenRewards"; token: token_address };
   event e
 end
 
-transition update_penalty_rate(new_rate: Uint128)
-  is_owner _sender;
+transition UpdatePenaltyRate(new_rate: Uint128)
+  RequireOwner _sender;
   new_penalty_rate_gt_zero = uint128_gt new_rate u128_zero;
   new_penalty_rate_le_max = uint128_le new_rate max_rate;
   valid_penalty_rate = andb new_penalty_rate_gt_zero new_penalty_rate_le_max;
@@ -572,12 +647,12 @@ transition update_penalty_rate(new_rate: Uint128)
     event e
   | False =>
     e = InvalidPenaltyRate;
-    throw_error e
+    ThrowError e
   end
 end
 
-transition update_lockup_cycle(new_lockup_cycle: Uint32)
-  is_owner _sender;
+transition UpdateLockupCycle(new_lockup_cycle: Uint32)
+  RequireOwner _sender;
   lockup_cycle := new_lockup_cycle;
   e = { _eventname: "UpdateLockup"; new_lockup_cycle: new_lockup_cycle};
   event e
@@ -587,22 +662,22 @@ end
 (*           Staking related transitions           *)
 (***************************************************)
 
-transition deposit(amount: Uint128)
-  is_unpaused;
-  transfer_zrc2_to_contract init_staking_token_address amount;
-  update_stake_map_onchange amount;
-  update_staker_bal _sender amount;
-  update_last_deposit_map _sender;
+transition Deposit(amount: Uint128)
+  RequireNotPaused;
+  RequireStarted;
+  RequireNotEnded;
+  TransferZRC2ToContract init_staking_token_address amount;
+  UpdateStakeMapOnchange amount;
+  UpdateStakerBal _sender amount;
+  UpdateLastDepositMap _sender;
   deposit_cycle <-last_cycle;
   e = { _eventname: "StakeDeposit"; staker : _sender; amount: amount; cycle: deposit_cycle };
   event e
 end
 
-transition claim()
-  is_unpaused;
-  update_stake_map_onchange u128_zero;
 
-  last_withdraw_cycle_opt <- last_withdraw_cycle[_sender];
+procedure ClaimProcedure(user: ByStr20)
+  last_withdraw_cycle_opt <- last_withdraw_cycle[user];
   last_withdraw_cycle_int = get_uint32_opt last_withdraw_cycle_opt;
   last_cycle_local <- last_cycle;
 
@@ -611,56 +686,62 @@ transition claim()
   reward_list = iota from_cycle last_cycle_local;
   e = { _eventname: "RewardClaim"; reward_list: reward_list};
   event e;
-  clean_rewards_distribution;
-  forall reward_list calculate_rewards;
-  send_rewards_distribution;
+  CleanRewardsDistribution;
+  forall reward_list CalculateRewards;
+  SendRewardsDistribution;
   last_withdraw_cycle_local = builtin sub last_cycle_local uint32_one;
-  last_withdraw_cycle[_sender] := last_withdraw_cycle_local
+  last_withdraw_cycle[user] := last_withdraw_cycle_local
 end
 
-transition check_rewards()
-  is_unpaused;
-  update_stake_map_onchange u128_zero;
+
+transition Claim()
+  RequireNotPaused;
+  RequireValidUser _sender;
+  UpdateStakeMapOnchange u128_zero;
+  ClaimProcedure _sender
+end
+
+transition CheckRewards()
+  RequireNotPaused;
+  UpdateStakeMapOnchange u128_zero;
   user = _sender;
 
   last_withdraw_cycle_opt <- last_withdraw_cycle[user];
   last_withdraw_cycle_int = get_uint32_opt last_withdraw_cycle_opt;
 
   (* update stakers_stake_per_cycle_tmp *)
-  update_stakers_stake_per_cycle_tmp last_withdraw_cycle_int user;
+  UpdateStakersStakePerCycleTmp last_withdraw_cycle_int user;
 
   last_cycle_local <- last_cycle;
 
   from_cycle = builtin add last_withdraw_cycle_int uint32_one;
   reward_list = iota from_cycle last_cycle_local;
   (* we share aggregate_rewards_tmp with claim, but it is ok as it just a tmp map *)
-  clean_rewards_distribution;
+  CleanRewardsDistribution;
 
   mapper = @list_map Uint32 UserAndCycle;
   f = fun (cycle: Uint32) => UserAndCycle user cycle;
   reward_list_with_user = mapper f reward_list;
-  forall reward_list_with_user calculate_rewards_tmp;
+  forall reward_list_with_user CalculateRewardsTmp;
 
   aggregate_rewards_map <- aggregate_rewards_tmp;
   aggregate_rewards_list = builtin to_list aggregate_rewards_map;
-  e = { _eventname: "check_rewards"; rewards: aggregate_rewards_list };
+  e = { _eventname: "CheckRewards"; rewards: aggregate_rewards_list };
   event e;
 
   (* clean up stakers_stake_per_cycle_tmp *)
-  clean_stakers_stake_per_cycle_tmp user
+  CleanStakersStakePerCycleTmp user
 
   (* don't update anything after this *)
 end
 
-transition withdraw()
-  is_unpaused;
+transition Withdraw()
+  RequireNotPaused;
+  RequireValidUser _sender;
   (* move last_cycle in case user has some unclaimed rewards *)
-  update_stake_map_onchange u128_zero;
+  UpdateStakeMapOnchange u128_zero;
 
-  (* check unclaimed rewards *)
-  last_withdraw_cycle_opt <- last_withdraw_cycle[_sender];
-  last_withdraw_cycle_int = get_uint32_opt last_withdraw_cycle_opt;
-  check_unclaimed_rewards last_withdraw_cycle_int;
+  ClaimProcedure _sender;
 
   (* get original stake amount *)
   stake_amount_opt <- stakers_total_bal[_sender];
@@ -676,28 +757,26 @@ transition withdraw()
   match gt_mini_cycle with
   | True =>
     (* clean user data *)
-    clean_user_data _sender;
+    CleanUserData _sender;
     (* update total amount *)
-    decrease_stake stake_amount;
+    DecreaseStake stake_amount;
     e = { _eventname: "WithdrawStake"; stake_amount: stake_amount };
     event e;
-    transfer_zrc2_from_contract init_staking_token_address _sender stake_amount
+    TransferZRC2FromContract init_staking_token_address _sender stake_amount
   | False =>
     e = StillInLockupPeriod;
-    throw_error e
+    ThrowError e
   end
 
 end
 
-transition withdraw_by_loss()
-  is_unpaused;
+transition WithdrawByLoss()
+  RequireNotPaused;
+  RequireValidUser _sender;
   (* move last_cycle in case user has some unclaimed rewards *)
-  update_stake_map_onchange u128_zero;
+  UpdateStakeMapOnchange u128_zero;
 
-  (* check unclaimed rewards *)
-  last_withdraw_cycle_opt <- last_withdraw_cycle[_sender];
-  last_withdraw_cycle_int = get_uint32_opt last_withdraw_cycle_opt;
-  check_unclaimed_rewards last_withdraw_cycle_int;
+  ClaimProcedure _sender;
 
   (* get original stake amount *)
   stake_amount_opt <- stakers_total_bal[_sender];
@@ -714,35 +793,35 @@ transition withdraw_by_loss()
   match gt_mini_cycle with
   | True =>
     e = OutofLockupPeriod;
-    throw_error e
+    ThrowError e
   | False =>
     penalty_amount = muldiv stake_amount penalty_rate_local max_rate;
     transfer_amount = builtin sub stake_amount penalty_amount;
-    increase_aggregated_penalty_amount penalty_amount;
-    clean_user_data _sender;
-    decrease_stake stake_amount;
+    IncreaseAggregatedPenaltyAmount penalty_amount;
+    CleanUserData _sender;
+    DecreaseStake stake_amount;
     e = { _eventname: "WithdrawStakeByLoss"; stake_amount: stake_amount; transfer_amount: transfer_amount; penalty_amount: penalty_amount};
     event e;
-    transfer_zrc2_from_contract init_staking_token_address _sender transfer_amount
+    TransferZRC2FromContract init_staking_token_address _sender transfer_amount
   end
 
 end
 
-transition withdraw_penalty()
-  is_owner _sender;
+transition WithdrawPenalty()
+  RequireOwner _sender;
   transfer_amount <- aggregated_penalty_amount;
   aggregated_penalty_amount := u128_zero;
   e = { _eventname: "AggregatedPenaltyWithdraw"; amount: transfer_amount};
   event e;
-  transfer_zrc2_from_contract init_staking_token_address _sender transfer_amount
+  TransferZRC2FromContract init_staking_token_address _sender transfer_amount
 end
 
-transition emergency_withdraw(token_address: ByStr20, amount: Uint128)
-  is_paused;
-  is_owner _sender;
+transition EmergencyWithdraw(token_address: ByStr20, amount: Uint128)
+  RequirePaused;
+  RequireOwner _sender;
   e = { _eventname: "EmergencyWithdraw"; token: token_address; amount: amount};
   event e;
-  transfer_zrc2_from_contract token_address _sender amount
+  TransferZRC2FromContract token_address _sender amount
 end
 
 (***************************************************)

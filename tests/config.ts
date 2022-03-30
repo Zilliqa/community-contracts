@@ -2,8 +2,8 @@ import { bytes, units } from "@zilliqa-js/util";
 import { Long, BN } from "@zilliqa-js/util";
 
 export const CONTAINER = process.env["CONTAINER"];
-//export const API = `http://localhost:${process.env["PORT"]}`; // Zilliqa Isolated Server
-export const API = 'https://xcad-isolated-server.zilliqa.com/'
+export const API = `http://localhost:${process.env["PORT"]}`; // Zilliqa Isolated Server
+//export const API = 'https://xcad-isolated-server.zilliqa.com/'
 export const CHAIN_ID = 222;
 export const MSG_VERSION = 1;
 export const VERSION = bytes.pack(CHAIN_ID, MSG_VERSION);
@@ -56,9 +56,9 @@ export const FAUCET_PARAMS = {
 };
 
 export const STAKING_ERROR = {
-  UserHasUnclaimedReward: -7,
-  StillInLockupPeriod: -9,
-  OutofLockupPeriod: -10,
+  StillInLockupPeriod: -10,
+  OutofLockupPeriod: -11,
+  InvalidUser: -15,
 };
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";

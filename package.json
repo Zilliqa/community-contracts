@@ -25,5 +25,8 @@
         "d96e9eb5b782a80ea153c937fa83e5948485fbfc8b7e7c069d7b914dbc350aba"
       ]
     }
+  },
+  "dependencies": {
+    "axios": "^0.24.0"
   }
 }

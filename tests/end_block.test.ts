@@ -12,6 +12,7 @@ import {
   asyncNoop,
   STAKING_ERROR,
 } from "./config";
+import axios from "axios";
 
 const JEST_WORKER_ID = Number(process.env["JEST_WORKER_ID"]);
 const GENESIS_PRIVATE_KEY = global.GENESIS_PRIVATE_KEYS[JEST_WORKER_ID - 1];
@@ -113,6 +114,12 @@ beforeAll(async () => {
     init_contract_owner: ["ByStr20", getTestAddr(OWNER)],
     init_staking_token_address: ["ByStr20", globalToken0ContractAddress],
     blocks_per_cycle: ["Uint256", "10"],
+    token_addr: ["ByStr20", globalToken2ContractAddress],
+    token_rewards: ["Uint128", "10000000000000"],
+    init_start_block: ["Uint256", 0],
+    init_end_block: ["Uint256", 0],
+    init_penalty_rate: ["Uint128", 10000000],
+    init_lockup_cycle: ["Uint32", 7]
   });
 
   [, contract] = await zilliqa.contracts
@@ -167,7 +174,7 @@ beforeAll(async () => {
   const tx3: any = await zilliqa.contracts
     .at(globalStakingContractAddress)
     .call(
-      "update_token_rewards",
+      "UpdateTokenRewards",
       getJSONParams({
         token_address: ["ByStr20", globalToken1ContractAddress],
         amount_per_cycle: ["Uint128", 10000000000000],
@@ -175,20 +182,6 @@ beforeAll(async () => {
       TX_PARAMS
     );
   if (!tx3.receipt.success) {
-    throw new Error();
-  }
-
-  const tx4: any = await zilliqa.contracts
-    .at(globalStakingContractAddress)
-    .call(
-      "update_token_rewards",
-      getJSONParams({
-        token_address: ["ByStr20", globalToken2ContractAddress],
-        amount_per_cycle: ["Uint128", 10000000000000],
-      }),
-      TX_PARAMS
-    );
-  if (!tx4.receipt.success) {
     throw new Error();
   }
 
@@ -215,13 +208,45 @@ beforeAll(async () => {
   if (!tx6.receipt.success) {
     throw new Error();
   }
+  const res = await axios.post(API, {
+    id: "1",
+    jsonrpc: "2.0",
+    method: "GetBlocknum",
+    params: [""],
+  });
+  const currentBum = Number(res.data.result);
+  const tx7: any = await zilliqa.contracts
+    .at(globalStakingContractAddress)
+    .call(
+      "UpdateStartBlock",
+      getJSONParams({
+        block: ["Uint256", currentBum.toString()],
+      }),
+      TX_PARAMS
+    );
+  if (!tx7.receipt.success) {
+    throw new Error();
+  }
+
+  const tx8: any = await zilliqa.contracts
+    .at(globalStakingContractAddress)
+    .call(
+      "UpdateEndBlock",
+      getJSONParams({
+        block: ["Uint256", (currentBum + 100).toString()],
+      }),
+      TX_PARAMS
+    );
+  if (!tx8.receipt.success) {
+    throw new Error();
+  }
 });
 
 describe("staking contract", () => {
   const testCases = [
     {
       name: "deposit once",
-      transition: "deposit",
+      transition: "Deposit",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({
         amount: ["Uint128", 10],
@@ -246,7 +271,7 @@ describe("staking contract", () => {
     },
     {
       name: "withdraw on current cycle",
-      transition: "withdraw",
+      transition: "Withdraw",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
       beforeTransition: asyncNoop,
@@ -269,68 +294,56 @@ describe("staking contract", () => {
     },
     {
       name: "withdraw with rewards",
-      transition: "withdraw",
+      transition: "Withdraw",
       getSender: () => getTestAddr(OWNER),
       getParams: () => ({}),
+      // although we increase 200 blocks, but we can only get 100 blocks rewards
+      // beacuse of the end_block setting
       beforeTransition: async () => {
-        await increaseBNum(zilliqa, 100);
+        await increaseBNum(zilliqa, 200);
       },
-      error: STAKING_ERROR.UserHasUnclaimedReward,
-      want: {
-        verifyState: (state) => {
-          return (
-            JSON.stringify(state.total_stake_per_cycle) === `{"1":"10"}` &&
-            JSON.stringify(state.total_stake) === `"10"` &&
-            JSON.stringify(state.last_cycle) === `"1"` &&
-            JSON.stringify(state.stakers_bal) ===
-              `{"${getTestAddr(OWNER).toLocaleLowerCase()}":{"1":"10"}}` &&
-            JSON.stringify(state.stakers_total_bal) ===
-              `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"10"}` &&
-            JSON.stringify(state.last_deposit_cycle) ===
-              `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"1"}`
-          );
-        },
-      },
-    },
-    {
-      name: "claim",
-      transition: "claim",
-      getSender: () => getTestAddr(OWNER),
-      getParams: () => ({}),
-      beforeTransition: asyncNoop,
-      error: undefined,
-      want: {
-        verifyState: (state) => {
-          return (
-            JSON.stringify(state.total_stake_per_cycle) ===
-              `{"1":"10","2":"10","3":"10","4":"10","5":"10","6":"10","7":"10","8":"10","9":"10","10":"10","11":"10"}` &&
-            JSON.stringify(state.total_stake) === `"10"` &&
-            JSON.stringify(state.last_cycle) === `"11"` &&
-            JSON.stringify(state.stakers_bal) ===
-              `{"${getTestAddr(OWNER).toLocaleLowerCase()}":{"1":"10"}}` &&
-            JSON.stringify(state.stakers_total_bal) ===
-              `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"10"}` &&
-            JSON.stringify(state.last_deposit_cycle) ===
-              `{"${getTestAddr(OWNER).toLocaleLowerCase()}":"1"}`
-          );
-        },
-      },
-    },
-    {
-      name: "withdraw",
-      transition: "withdraw",
-      getSender: () => getTestAddr(OWNER),
-      getParams: () => ({}),
-      beforeTransition: asyncNoop,
       error: undefined,
       want: {
         events: [
           {
-            name: "WithdrawStake",
+            name: "RewardClaim",
             getParams: () => ({
-              stake_amount: ["Uint128", 10],
-              transfer_amount: ["Uint128", 10],
-              penalty_amount: ["Uint128", 0],
+              reward_list: [
+                "List (Uint32)",
+                ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10",],
+              ],
+            }),
+          },
+          {
+            name: "TransferSuccess",
+            getParams: () => ({
+              sender: ["ByStr20", globalStakingContractAddress],
+              recipient: ["ByStr20", getTestAddr(OWNER)],
+              amount: ["Uint128", "100000000000000"],
+            }),
+          },
+          {
+            name: "TransferSuccessCallBack",
+            getParams: () => ({
+              sender: ["ByStr20", globalStakingContractAddress],
+              recipient: ["ByStr20", getTestAddr(OWNER)],
+              amount: ["Uint128", "100000000000000"],
+            }),
+          },
+          {
+            name: "TransferSuccess",
+            getParams: () => ({
+              sender: ["ByStr20", globalStakingContractAddress],
+              recipient: ["ByStr20", getTestAddr(OWNER)],
+              amount: ["Uint128", "100000000000000"],
+            }),
+          },
+          {
+            name: "TransferSuccessCallBack",
+            getParams: () => ({
+              sender: ["ByStr20", globalStakingContractAddress],
+              recipient: ["ByStr20", getTestAddr(OWNER)],
+              amount: ["Uint128", "100000000000000"],
             }),
           },
           {
